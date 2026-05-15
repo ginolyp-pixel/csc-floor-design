@@ -1,0 +1,606 @@
+/* Floor Design tool layout (site chrome uses ../../css/main.css) */
+
+.fd-shell {
+  --fd-accent: #d23540;
+  --fd-panel: #f4f5f7;
+  --fd-border: rgba(0, 0, 0, 0.08);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #eef1f4;
+}
+
+/* Restore the [hidden] attribute. Several rules below set display: flex/block
+   on classes that also receive `hidden` (photo hint, photo canvas, toolbar),
+   which would otherwise win over the UA `[hidden] { display: none }`. */
+.fd-shell [hidden] {
+  display: none !important;
+}
+
+.fd-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 20px 16px 48px;
+  box-sizing: border-box;
+}
+
+@media (min-width: 960px) {
+  .fd-main {
+    flex-direction: row;
+    /* Do not stretch preview to sidebar height (sidebar + grid can be very tall). */
+    align-items: flex-start;
+    gap: 20px;
+    padding: 24px 20px 56px;
+  }
+}
+
+.fd-viewport-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 280px;
+  /* Fixed visual height so WebGL/photo never inherit an unbounded flex cross-size. */
+  height: min(52vh, 480px);
+  max-height: min(52vh, 480px);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  background: #1a1d22;
+}
+
+@media (min-width: 960px) {
+  .fd-viewport-wrap {
+    min-height: 360px;
+    height: min(72vh, 640px);
+    max-height: min(72vh, 640px);
+  }
+}
+
+.fd-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+}
+
+.fd-viewport canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.fd-photo-canvas {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-height: 100%;
+  height: auto;
+  margin: 0 auto;
+  cursor: crosshair;
+  object-fit: contain;
+  background: #111;
+  /* Prevent the browser from interpreting drags as page scroll / pinch /
+     swipe-back gestures so our pointer events stay continuous on touch. */
+  touch-action: none;
+}
+
+.fd-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 255, 255, 0.94);
+  padding: 14px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #2d3748;
+  pointer-events: none;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 2;
+  transition: opacity 0.35s ease;
+}
+
+.fd-cam-toggle {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: rgba(20, 24, 33, 0.78);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+.fd-cam-toggle:hover {
+  background: rgba(20, 24, 33, 0.92);
+  transform: translateY(-1px);
+}
+.fd-cam-toggle:focus-visible {
+  outline: 2px solid #d23540;
+  outline-offset: 2px;
+}
+.fd-cam-toggle__icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.fd-cam-toggle[aria-pressed='true'] .fd-cam-toggle__icon {
+  background: rgba(35, 164, 86, 0.85);
+}
+
+.fd-hint.fd-hint--hide {
+  opacity: 0;
+}
+
+.fd-hint span {
+  font-size: 20px;
+}
+
+.fd-sidebar {
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  background: var(--fd-panel);
+  border-radius: 8px;
+  border: 1px solid var(--fd-border);
+  padding: 18px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: none;
+  min-height: 0;
+}
+
+@media (min-width: 960px) {
+  .fd-sidebar {
+    margin: 0;
+    max-height: calc(100vh - 140px);
+  }
+}
+
+.fd-sidebar h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.fd-preview {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 2px solid rgba(0, 0, 0, 0.06);
+  background: #fff;
+}
+
+.fd-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.fd-search {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--fd-border);
+  border-radius: 6px;
+  font-family: Montserrat, Arial, sans-serif;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.fd-search:focus {
+  outline: none;
+  border-color: var(--fd-accent);
+}
+
+.fd-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px;
+  flex: 1;
+  min-height: 200px;
+}
+
+@media (min-width: 960px) {
+  .fd-grid {
+    max-height: 360px;
+  }
+}
+
+.fd-swatch {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  padding: 0;
+  cursor: pointer;
+  background: #fff;
+  text-align: left;
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  font-family: Montserrat, Arial, sans-serif;
+}
+
+.fd-swatch:hover {
+  border-color: rgba(210, 53, 64, 0.35);
+}
+
+.fd-swatch[aria-pressed='true'] {
+  border-color: var(--fd-accent);
+  box-shadow: 0 0 0 1px var(--fd-accent);
+}
+
+.fd-swatch img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+}
+
+.fd-swatch figcaption {
+  padding: 8px 10px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1a202c;
+  line-height: 1.25;
+}
+
+.fd-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-family: Montserrat, Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.fd-btn--primary {
+  background: var(--fd-accent);
+  color: #fff;
+}
+
+.fd-btn--primary:hover {
+  background: #b82d37;
+  color: #fff;
+}
+
+.fd-btn--ghost {
+  background: #fff;
+  color: #2d3748;
+  border: 1px solid var(--fd-border);
+}
+
+.fd-btn--ghost:hover {
+  border-color: rgba(0, 0, 0, 0.18);
+}
+
+.fd-mode-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 16px 16px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.fd-mode-btn {
+  font-family: Montserrat, Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 10px 18px;
+  border-radius: 6px;
+  border: 2px solid var(--fd-border);
+  background: #fff;
+  color: #2d3748;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, color 0.2s;
+}
+
+.fd-mode-btn:hover {
+  border-color: rgba(210, 53, 64, 0.35);
+}
+
+.fd-mode-btn--active {
+  border-color: var(--fd-accent);
+  background: var(--fd-accent);
+  color: #fff;
+}
+
+.fd-mode-btn--active:hover {
+  background: #b82d37;
+  border-color: #b82d37;
+  color: #fff;
+}
+
+.fd-photo-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border-top: 1px solid var(--fd-border);
+}
+
+.fd-photo-upload {
+  cursor: pointer;
+}
+
+.fd-photo-status {
+  flex: 1;
+  min-width: 140px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.55);
+  line-height: 1.35;
+}
+
+.fd-btn--small {
+  padding: 8px 12px;
+  font-size: 11px;
+}
+
+.fd-hint--photo {
+  display: block;
+  max-width: 88%;
+  text-align: center;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.fd-hint--photo strong {
+  font-weight: 800;
+}
+
+.fd-banner-intro {
+  text-align: center;
+  padding: 28px 16px 8px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.fd-banner-intro h1 {
+  margin: 0 0 10px;
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(0, 0, 0, 0.78);
+}
+
+.fd-banner-intro p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: rgba(0, 0, 0, 0.58);
+}
+
+.fd-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 24px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 14px;
+}
+
+/* ============================================================
+   Mobile (≤767px) — matches the site's breakpoint in main.css.
+   Goals: prevent horizontal overflow, make the 3D viewport
+   read at a comfortable 4:3 aspect, shrink chrome (mode bar,
+   cam toggle, hint), reserve room for the site's fixed mobile
+   sticky CTA bar at the bottom.
+   ============================================================ */
+@media (max-width: 767px) {
+  .fd-shell {
+    overflow-x: hidden;
+    /* Avoid being hidden behind the site's `.mobile-sticky-cta` bar */
+    padding-bottom: 80px;
+  }
+
+  .fd-banner-intro {
+    padding: 16px 14px 4px;
+  }
+
+  .fd-banner-intro h1 {
+    font-size: 18px;
+    letter-spacing: 0.04em;
+  }
+
+  .fd-banner-intro p {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .fd-mode-bar {
+    padding: 0 12px 12px;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  .fd-mode-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 10px 6px;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-align: center;
+  }
+
+  .fd-main {
+    padding: 12px 12px 20px;
+    gap: 14px;
+  }
+
+  .fd-viewport-wrap {
+    /* Fluid 4:3 viewport; min keeps it usable on tiny screens, max
+       prevents it from eating the rest of the page. */
+    height: auto;
+    aspect-ratio: 4 / 3;
+    min-height: 260px;
+    max-height: 60vh;
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  }
+
+  /* Photo mode: the wrap also has to host the photo toolbar (Choose
+     Photo / Undo / Done / Reset / Remove) which eats ~120 px of vertical
+     space on mobile. Stretching the wrap to 75 vh gives the user
+     a much larger photo to trace — closer to a "fullscreen" feel. */
+  .fd-shell[data-fd-mode='photo'] .fd-viewport-wrap {
+    /* The wrap is a flex column containing the canvas + the photo
+       toolbar. Growing the wrap lets the canvas (flex:1) absorb the
+       extra vertical space, so the black tracing area becomes ~40%
+       taller. 92 vh keeps a sliver clear for the page header above. */
+    aspect-ratio: auto;
+    height: 92vh;
+    min-height: 500px;
+    max-height: none;
+  }
+
+  .fd-cam-toggle {
+    right: 10px;
+    bottom: 10px;
+    padding: 7px 11px;
+    font-size: 11px;
+    gap: 6px;
+    border-radius: 999px;
+  }
+
+  .fd-cam-toggle__icon {
+    width: 14px;
+    height: 14px;
+    font-size: 10px;
+  }
+
+  .fd-hint {
+    font-size: 12px;
+    padding: 10px 14px;
+    max-width: calc(100% - 28px);
+    line-height: 1.4;
+  }
+
+  .fd-hint span {
+    font-size: 16px;
+  }
+
+  .fd-hint--photo {
+    /* About 10% smaller than the base hint, with tighter padding so the
+       centered instruction box reads as a compact overlay rather than
+       filling the canvas.
+
+       `top` is pulled UP to ~30% because `.fd-viewport-wrap` contains
+       both the canvas AND the photo toolbar — centering on the wrap
+       (top: 50%) pushes the hint into the toolbar area on mobile.
+       30% lands the hint inside the visible canvas region above the
+       toolbar regardless of how many rows the toolbar buttons wrap to. */
+    top: 30%;
+    font-size: 11px;
+    line-height: 1.35;
+    padding: 8px 11px;
+    max-width: 78%;
+    max-height: calc(100% - 140px);
+    overflow: hidden;
+    text-align: center;
+  }
+
+  .fd-sidebar {
+    padding: 14px;
+    gap: 12px;
+    max-width: 100%;
+    border-radius: 6px;
+  }
+
+  .fd-preview {
+    /* Square preview is way too tall on mobile — center & shrink it. */
+    max-width: 55%;
+    margin: 0 auto;
+  }
+
+  .fd-search {
+    font-size: 13px;
+    padding: 9px 11px;
+  }
+
+  .fd-grid {
+    gap: 8px;
+    max-height: 340px;
+  }
+
+  .fd-swatch figcaption {
+    font-size: 11px;
+    padding: 6px 8px 8px;
+    line-height: 1.2;
+  }
+
+  .fd-btn {
+    font-size: 12px;
+    padding: 11px 14px;
+    letter-spacing: 0.05em;
+  }
+
+  .fd-btn--small {
+    padding: 7px 10px;
+    font-size: 10px;
+  }
+
+  .fd-photo-toolbar {
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .fd-photo-status {
+    flex-basis: 100%;
+    min-width: 0;
+    font-size: 11px;
+  }
+}

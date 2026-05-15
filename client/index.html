@@ -1,28 +1,69 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="robots" content="noindex, nofollow">
-    <title>Floor Designer — Concrete Shield Coatings Inc.</title>
-    <meta name="description" content="Interactive concrete floor coating design tool for homeowners and Concrete Shield technicians.">
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' fill='%23c0392b'/%3E%3Ctext x='12' y='17' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold' font-size='14'%3EC%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/src/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Floor Designer | Concrete Shield Coatings</title>
+  <meta name="description" content="Preview popular flake blends on a sample garage floor before we coat yours.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' fill='%23c0392b'/%3E%3Ctext x='12' y='17' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='bold' font-size='14'%3EC%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/src/styles.css">
+  <link rel="stylesheet" href="/src/app.css">
 </head>
 <body>
-    <main class="boot">
-        <div class="brand">
-            <span class="brand-mark">C</span>
-            <span class="brand-text">Concrete Shield <em>Designer</em></span>
+<div id="wrapper">
+  <header class="designer-header">
+    <a class="designer-brand" href="https://www.concreteshieldcoatingsinc.com">
+      <span class="brand-mark">C</span>
+      <span class="brand-text">Concrete Shield <em>Designer</em></span>
+    </a>
+    <nav class="designer-utility">
+      <a href="https://www.concreteshieldcoatingsinc.com/flake-colors" rel="noopener">Flake catalog</a>
+      <a href="https://www.concreteshieldcoatingsinc.com/contact" rel="noopener">Get a quote</a>
+    </nav>
+  </header>
+
+  <div class="fd-shell">
+    <div class="fd-banner-intro">
+      <h1>Choose your flake finish</h1>
+      <p>Click any blend below to see it on a sample garage floor. Drag to look around. Photo upload (use your own garage) is coming next.</p>
+    </div>
+
+    <div class="fd-main">
+      <div class="fd-viewport-wrap">
+        <div id="fd-hint" class="fd-hint" role="status"><span aria-hidden="true">↔</span> Click and drag to look around</div>
+        <button type="button" id="fd-cam-toggle" class="fd-cam-toggle" aria-pressed="false" title="Toggle free look — when on you stand in the middle of the garage and orbit the camera yourself; when off the auto cinematic tour plays">
+          <span class="fd-cam-toggle__icon" aria-hidden="true">▶</span>
+          <span class="fd-cam-toggle__label">Free look: Off</span>
+        </button>
+        <div id="fd-viewport" class="fd-viewport" aria-label="3D garage preview"></div>
+        <div id="fd-loading" class="fd-loading" role="status" aria-live="polite">
+          <span class="fd-loading__spinner" aria-hidden="true"></span>
+          <span class="fd-loading__label">Loading 3D scene…</span>
         </div>
-        <h1>Floor Designer is booting up.</h1>
-        <p class="lede">A faster way to preview your garage or basement floor before we coat it.</p>
-        <div class="status" id="status">
-            <span class="dot" id="dot"></span>
-            <span id="status-text">Checking server…</span>
+      </div>
+
+      <aside class="fd-sidebar" aria-label="Flake color options">
+        <h2>Selected sample</h2>
+        <div class="fd-preview">
+          <img id="fd-preview-img" src="" alt="" width="400" height="400">
         </div>
-        <p class="muted">Phase 0 — deployment pipeline verification. The interactive tool ships in the next phase.</p>
-    </main>
-    <script type="module" src="/src/main.ts"></script>
+        <h2>Search blends</h2>
+        <label class="visually-hidden" for="fd-search">Search flake colors</label>
+        <input type="search" id="fd-search" class="fd-search" placeholder="Search by name…" autocomplete="off">
+        <h2>Popular flake colors</h2>
+        <div id="fd-grid" class="fd-grid"></div>
+        <div class="fd-actions">
+          <a id="fd-quote" class="fd-btn fd-btn--primary" href="https://www.concreteshieldcoatingsinc.com/contact">Request quote with this finish</a>
+          <a class="fd-btn fd-btn--ghost" href="https://www.concreteshieldcoatingsinc.com/flake-colors">View full flake gallery</a>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+<script type="module" src="/src/main.ts"></script>
 </body>
 </html>
