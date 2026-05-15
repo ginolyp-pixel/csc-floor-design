@@ -29,17 +29,35 @@
   <div class="fd-shell">
     <div class="fd-banner-intro">
       <h1>Choose your flake finish</h1>
-      <p>Click any blend below to see it on a sample garage floor. Drag to look around. Photo upload (use your own garage) is coming next.</p>
+      <p>Pick a blend to see it on a sample garage, or switch to <strong>My garage photo</strong> to upload a picture and mark your floor area. This is a digital sample—your estimator will confirm color and system on site.</p>
+    </div>
+
+    <div class="fd-mode-bar" role="tablist" aria-label="Visualizer mode">
+      <button type="button" class="fd-mode-btn fd-mode-btn--active" id="fd-mode-3d" role="tab" aria-selected="true" aria-controls="fd-viewport">3D sample garage</button>
+      <button type="button" class="fd-mode-btn" id="fd-mode-photo" role="tab" aria-selected="false" aria-controls="fd-photo-canvas">My garage photo</button>
     </div>
 
     <div class="fd-main">
       <div class="fd-viewport-wrap">
         <div id="fd-hint" class="fd-hint" role="status"><span aria-hidden="true">↔</span> Click and drag to look around</div>
+        <div id="fd-photo-hint" class="fd-hint fd-hint--photo" hidden>Upload a photo, then trace the <strong>edge of your floor</strong>. Close the shape on your first marker (or press <strong>Done</strong>) to fill it with the selected flake.</div>
         <button type="button" id="fd-cam-toggle" class="fd-cam-toggle" aria-pressed="false" title="Toggle free look — when on you stand in the middle of the garage and orbit the camera yourself; when off the auto cinematic tour plays">
           <span class="fd-cam-toggle__icon" aria-hidden="true">▶</span>
           <span class="fd-cam-toggle__label">Free look: Off</span>
         </button>
         <div id="fd-viewport" class="fd-viewport" aria-label="3D garage preview"></div>
+        <canvas id="fd-photo-canvas" class="fd-photo-canvas" width="800" height="600" hidden aria-label="Your garage photo preview"></canvas>
+        <div id="fd-photo-toolbar" class="fd-photo-toolbar" hidden>
+          <label class="fd-photo-upload">
+            <input type="file" id="fd-photo-file" accept="image/jpeg,image/png,image/webp,image/heic,.heic" class="visually-hidden">
+            <span class="fd-btn fd-btn--small fd-btn--primary">Choose photo</span>
+          </label>
+          <button type="button" class="fd-btn fd-btn--small fd-btn--ghost" id="fd-photo-undo" disabled>Undo last point</button>
+          <button type="button" class="fd-btn fd-btn--small fd-btn--ghost" id="fd-photo-done" disabled>Done</button>
+          <button type="button" class="fd-btn fd-btn--small fd-btn--ghost" id="fd-photo-reset-outline" disabled>Reset outline</button>
+          <button type="button" class="fd-btn fd-btn--small fd-btn--ghost" id="fd-photo-clear" disabled>Remove photo</button>
+          <span id="fd-photo-status" class="fd-photo-status" role="status"></span>
+        </div>
         <div id="fd-loading" class="fd-loading" role="status" aria-live="polite">
           <span class="fd-loading__spinner" aria-hidden="true"></span>
           <span class="fd-loading__label">Loading 3D scene…</span>
