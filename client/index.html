@@ -72,8 +72,17 @@
         <h2>Search blends</h2>
         <label class="visually-hidden" for="fd-search">Search flake colors</label>
         <input type="search" id="fd-search" class="fd-search" placeholder="Search by name…" autocomplete="off">
-        <h2>Popular flake colors</h2>
-        <div id="fd-grid" class="fd-grid"></div>
+        <section id="fd-section-standard" class="fd-section">
+          <h2 class="fd-section-head">Standard blends <span class="fd-count">11</span></h2>
+          <div id="fd-grid-standard" class="fd-grid"></div>
+        </section>
+        <section id="fd-section-custom" class="fd-section">
+          <h2 class="fd-section-head">Custom blends <span class="fd-count">17</span></h2>
+          <p class="fd-custom-blurb">Less common combinations and pigment-matched mixes. Custom blends typically add $0.50–$1.50/sq ft and need 1–2 extra weeks for sourcing.</p>
+          <div id="fd-grid-custom" class="fd-grid"></div>
+        </section>
+        <p id="fd-empty" class="fd-empty" hidden>No matches. Try another search.</p>
+        <p class="fd-extras">Don't see what you want? The manufacturer catalog includes <strong>100+ additional custom blends</strong> we can source on request. Pricing depends on the chosen blend; we'll quote it during the on-site estimate.</p>
         <div class="fd-actions">
           <a id="fd-quote" class="fd-btn fd-btn--primary" href="https://www.concreteshieldcoatingsinc.com/contact">Request quote with this finish</a>
           <a class="fd-btn fd-btn--ghost" href="https://www.concreteshieldcoatingsinc.com/flake-colors">View full flake gallery</a>

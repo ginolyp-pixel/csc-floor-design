@@ -3,7 +3,13 @@
  * dynamically imported on demand so the initial JS chunk is small and the UI
  * (flake grid, search) renders before the heavy graphics download.
  */
-import { FLOOR_FINISHES, type FloorFinish, getFinishById } from "./catalog";
+import {
+  STANDARD_FINISHES,
+  CUSTOM_FINISHES,
+  FLOOR_FINISHES,
+  type FloorFinish,
+  getFinishById,
+} from "./catalog";
 import type { Garage } from "./scene/garage";
 import type { PhotoMode } from "./photo/photo";
 
@@ -37,18 +43,33 @@ function setActiveTile(tiles: HTMLElement[], finishId: string): void {
   }
 }
 
-function filterTiles(tiles: HTMLElement[], query: string): void {
+type SectionGroup = { section: HTMLElement; tiles: HTMLElement[] };
+
+function applySearchFilter(groups: SectionGroup[], query: string, emptyMsg: HTMLElement | null): void {
   const q = query.trim().toLowerCase();
-  for (const t of tiles) {
-    const name = (t.querySelector("figcaption")?.textContent ?? "").toLowerCase();
-    t.hidden = q.length > 0 && !name.includes(q);
+  let anyVisible = false;
+  for (const { section, tiles } of groups) {
+    let groupVisible = false;
+    for (const t of tiles) {
+      const name = (t.querySelector("figcaption")?.textContent ?? "").toLowerCase();
+      const hidden = q.length > 0 && !name.includes(q);
+      t.hidden = hidden;
+      if (!hidden) groupVisible = true;
+    }
+    section.hidden = !groupVisible;
+    if (groupVisible) anyVisible = true;
   }
+  if (emptyMsg) emptyMsg.hidden = anyVisible;
 }
 
 async function init(): Promise<void> {
   const shell = document.querySelector(".fd-shell") as HTMLElement | null;
   const viewport = document.getElementById("fd-viewport");
-  const grid = document.getElementById("fd-grid");
+  const sectionStandard = document.getElementById("fd-section-standard");
+  const sectionCustom = document.getElementById("fd-section-custom");
+  const gridStandard = document.getElementById("fd-grid-standard");
+  const gridCustom = document.getElementById("fd-grid-custom");
+  const emptyMsg = document.getElementById("fd-empty");
   const search = document.getElementById("fd-search") as HTMLInputElement | null;
   const preview = document.getElementById("fd-preview-img") as HTMLImageElement | null;
   const hint3d = document.getElementById("fd-hint");
@@ -68,7 +89,8 @@ async function init(): Promise<void> {
   const photoStatus = document.getElementById("fd-photo-status");
 
   if (
-    !viewport || !grid || !search || !preview || !quoteLink ||
+    !viewport || !sectionStandard || !sectionCustom || !gridStandard || !gridCustom ||
+    !search || !preview || !quoteLink ||
     !btn3d || !btnPhoto || !photoCanvas || !photoToolbar ||
     !photoFile || !photoUndo || !photoDone || !photoResetOutline ||
     !photoClear || !photoStatus
@@ -134,16 +156,22 @@ async function init(): Promise<void> {
 
     setPreview(finish);
     setQuoteHref(finish);
-    setActiveTile(tiles, finish.id);
+    setActiveTile(allTiles, finish.id);
 
     void garage?.setFinish(finish);
     if (photo) void photo.setFinish(finish);
   };
 
-  const tiles = buildFinishGrid(grid, FLOOR_FINISHES, selectFinish);
-  setActiveTile(tiles, selectedFinish.id);
+  const tilesStandard = buildFinishGrid(gridStandard, STANDARD_FINISHES, selectFinish);
+  const tilesCustom = buildFinishGrid(gridCustom, CUSTOM_FINISHES, selectFinish);
+  const allTiles = [...tilesStandard, ...tilesCustom];
+  const sectionGroups: SectionGroup[] = [
+    { section: sectionStandard, tiles: tilesStandard },
+    { section: sectionCustom, tiles: tilesCustom },
+  ];
+  setActiveTile(allTiles, selectedFinish.id);
 
-  search.addEventListener("input", () => filterTiles(tiles, search.value));
+  search.addEventListener("input", () => applySearchFilter(sectionGroups, search.value, emptyMsg));
 
   let hideHint = false;
   const maybeHideHint = (): void => {

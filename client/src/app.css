@@ -433,6 +433,52 @@
   font-size: 14px;
 }
 
+/* Standard / Custom section structure for the sidebar grid. */
+.fd-section {
+  margin-bottom: 18px;
+}
+.fd-section[hidden] {
+  display: none;
+}
+.fd-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 14px 0 10px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #1a1d22;
+}
+.fd-count {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #f1f1f3;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+}
+.fd-custom-blurb {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #555;
+}
+.fd-extras {
+  margin: 16px 0 20px;
+  padding: 12px 14px;
+  background: #f8f6f3;
+  border-left: 3px solid #c0392b;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #333;
+  border-radius: 0 6px 6px 0;
+}
+.fd-extras strong {
+  color: #1a1d22;
+}
+
 /* ============================================================
    Mobile (≤767px) — matches the site's breakpoint in main.css.
    Goals: prevent horizontal overflow, make the 3D viewport
