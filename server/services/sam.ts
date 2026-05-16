@@ -1,12 +1,7 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { env } from "../env.ts";
 
 const MODEL_ID = "Xenova/slimsam-77-uniform";
 
-// transformers.js exports — these come with their own typing but we import
-// dynamically so the module isn't pulled in until the first segment request,
-// avoiding ~150 MB of native bindings on cold start.
 type LazyTransformers = {
   SamModel: typeof import("@huggingface/transformers").SamModel;
   AutoProcessor: typeof import("@huggingface/transformers").AutoProcessor;
@@ -14,17 +9,12 @@ type LazyTransformers = {
   Tensor: typeof import("@huggingface/transformers").Tensor;
 };
 
-const EMBEDDINGS_DIR = join(env.DATA_DIR, "embeddings");
-mkdirSync(EMBEDDINGS_DIR, { recursive: true });
-
 let modelPromise: Promise<{ model: any; processor: any; tx: LazyTransformers }> | null = null;
 async function loadModel() {
   if (modelPromise) return modelPromise;
   modelPromise = (async () => {
     const tx = (await import("@huggingface/transformers")) as unknown as LazyTransformers & { env: any };
-    // Cache HF model downloads inside our DATA_DIR so a deploy that nukes
-    // /tmp or ~/.cache doesn't re-download 40 MB on next boot.
-    (tx as any).env.cacheDir = join(env.DATA_DIR, "hf-cache");
+    (tx as any).env.cacheDir = `${env.DATA_DIR}/hf-cache`;
     const model = await tx.SamModel.from_pretrained(MODEL_ID);
     const processor = await tx.AutoProcessor.from_pretrained(MODEL_ID);
     return { model, processor, tx };
@@ -32,94 +22,18 @@ async function loadModel() {
   return modelPromise;
 }
 
-// Serialize all SAM work through one queue: only one encoder or decoder run
-// at a time. This is the safety valve against two simultaneous customers
-// both kicking off an encoder run and double-spiking RAM.
+// Serialize all SAM work through one queue so two concurrent requests
+// don't both kick off encoder runs and double-spike RAM.
 let queueTail: Promise<unknown> = Promise.resolve();
 function runQueued<T>(fn: () => Promise<T>): Promise<T> {
   const next = queueTail.then(() => fn(), () => fn());
-  queueTail = next.catch(() => { /* swallow so a failed job doesn't poison the queue */ });
+  queueTail = next.catch(() => {});
   return next;
 }
 
-type CachedEmbedding = {
-  embeddings_bin: Buffer;
-  embeddings_shape: number[];
-  original_w: number;
-  original_h: number;
-  reshaped_w: number;
-  reshaped_h: number;
-};
-
-function embedPath(designId: string): string {
-  return join(EMBEDDINGS_DIR, `${designId}.bin`);
-}
-
-function writeEmbedding(designId: string, cached: CachedEmbedding): void {
-  // Binary layout: [4 byte magic 'SAM1'][2 byte shape_len][shape ints u32]
-  //   [2 byte sizes: original_w, original_h, reshaped_w, reshaped_h u32]
-  //   [embeddings_bin raw float32 LE]
-  const shape = cached.embeddings_shape;
-  const headerSize = 4 + 2 + shape.length * 4 + 4 * 4;
-  const header = Buffer.alloc(headerSize);
-  let off = 0;
-  header.write("SAM1", off); off += 4;
-  header.writeUInt16LE(shape.length, off); off += 2;
-  for (const s of shape) { header.writeUInt32LE(s, off); off += 4; }
-  header.writeUInt32LE(cached.original_w, off); off += 4;
-  header.writeUInt32LE(cached.original_h, off); off += 4;
-  header.writeUInt32LE(cached.reshaped_w, off); off += 4;
-  header.writeUInt32LE(cached.reshaped_h, off); off += 4;
-  writeFileSync(embedPath(designId), Buffer.concat([header, cached.embeddings_bin]));
-}
-
-function readEmbedding(designId: string): CachedEmbedding | null {
-  const path = embedPath(designId);
-  if (!existsSync(path)) return null;
-  const buf = readFileSync(path);
-  let off = 0;
-  if (buf.toString("utf8", 0, 4) !== "SAM1") return null;
-  off += 4;
-  const shapeLen = buf.readUInt16LE(off); off += 2;
-  const shape: number[] = [];
-  for (let i = 0; i < shapeLen; i++) { shape.push(buf.readUInt32LE(off)); off += 4; }
-  const original_w = buf.readUInt32LE(off); off += 4;
-  const original_h = buf.readUInt32LE(off); off += 4;
-  const reshaped_w = buf.readUInt32LE(off); off += 4;
-  const reshaped_h = buf.readUInt32LE(off); off += 4;
-  const embeddings_bin = buf.subarray(off);
-  return { embeddings_bin, embeddings_shape: shape, original_w, original_h, reshaped_w, reshaped_h };
-}
-
-export async function ensureEmbedding(designId: string, photoBuffer: Buffer): Promise<CachedEmbedding> {
-  const existing = readEmbedding(designId);
-  if (existing) return existing;
-  return runQueued(async () => {
-    // Double-check inside the lock — another request may have just produced it.
-    const stillExisting = readEmbedding(designId);
-    if (stillExisting) return stillExisting;
-    const { model, processor, tx } = await loadModel();
-    const raw = await tx.RawImage.fromBlob(new Blob([new Uint8Array(photoBuffer)]));
-    const inputs = await processor(raw);
-    const embeddings = await model.get_image_embeddings(inputs);
-
-    const embTensor = embeddings.image_embeddings;
-    const cached: CachedEmbedding = {
-      embeddings_bin: Buffer.from(new Float32Array(embTensor.data).buffer),
-      embeddings_shape: Array.from(embTensor.dims),
-      original_w: Number(inputs.original_sizes[0][1]),
-      original_h: Number(inputs.original_sizes[0][0]),
-      reshaped_w: Number(inputs.reshaped_input_sizes[0][1]),
-      reshaped_h: Number(inputs.reshaped_input_sizes[0][0]),
-    };
-    writeEmbedding(designId, cached);
-    return cached;
-  });
-}
-
 export type SegmentRequest = {
-  points: [number, number][]; // photo-pixel coords
-  labels: number[];           // 1 = include, 0 = exclude
+  points: [number, number][];
+  labels: number[];
 };
 
 export type SegmentResult = {
@@ -127,25 +41,26 @@ export type SegmentResult = {
   iou: number;
   mask_width: number;
   mask_height: number;
-  encoder_ms: number | null; // null if served from cache
+  encoder_ms: number;
   decoder_ms: number;
 };
 
-export async function segmentWithEmbedding(
-  cached: CachedEmbedding,
+export async function segmentDesign(
+  _designId: string,
+  photoBuffer: Buffer,
   req: SegmentRequest,
-): Promise<{ maskBytes: Uint8Array; maskW: number; maskH: number; iou: number; decoderMs: number }> {
+): Promise<SegmentResult> {
   if (req.points.length === 0) throw new Error("at least one tap point required");
   if (req.points.length !== req.labels.length) throw new Error("points and labels length mismatch");
+
   return runQueued(async () => {
     const { model, processor, tx } = await loadModel();
 
-    // Copy into a fresh Float32Array. Our packed header puts the bin section
-    // at byteOffset 38, which is not a multiple of 4 — direct typed-array
-    // construction errors with "start offset should be a multiple of 4".
-    const float32Buf = new Float32Array(cached.embeddings_bin.byteLength / 4);
-    new Uint8Array(float32Buf.buffer).set(cached.embeddings_bin);
-    const embTensor = new tx.Tensor("float32", float32Buf, cached.embeddings_shape);
+    const t0 = Date.now();
+    const raw = await tx.RawImage.fromBlob(new Blob([new Uint8Array(photoBuffer)]));
+    const inputs = await processor(raw);
+    const embeddings = await model.get_image_embeddings(inputs);
+    const encoder_ms = Date.now() - t0;
 
     const inputPoints = new tx.Tensor(
       "float32",
@@ -158,29 +73,18 @@ export async function segmentWithEmbedding(
       [1, 1, req.labels.length],
     );
 
-    // transformers.js's SlimSAM forward() always wants pixel_values as input.
-    // When image_embeddings is provided the model SHOULD use the cache and
-    // not actually look at pixel_values — pass a zero tensor at the expected
-    // 1024×1024×3 shape so the input-presence check passes.
-    const pixelValues = new tx.Tensor(
-      "float32",
-      new Float32Array(3 * 1024 * 1024),
-      [1, 3, 1024, 1024],
-    );
-
-    const t0 = Date.now();
+    const t1 = Date.now();
     const outputs = await model({
-      pixel_values: pixelValues,
-      image_embeddings: embTensor,
+      ...embeddings,
       input_points: inputPoints,
       input_labels: inputLabels,
     });
     const masks = await processor.post_process_masks(
       outputs.pred_masks,
-      [[cached.original_h, cached.original_w]],
-      [[cached.reshaped_h, cached.reshaped_w]],
+      inputs.original_sizes,
+      inputs.reshaped_input_sizes,
     );
-    const decoderMs = Date.now() - t0;
+    const decoder_ms = Date.now() - t1;
 
     const iouScores = outputs.iou_scores.data as Float32Array;
     let bestIdx = 0;
@@ -196,14 +100,12 @@ export async function segmentWithEmbedding(
     const src = maskTensor.data as Uint8Array;
     for (let i = 0; i < planeSize; i++) maskBytes[i] = src[offset + i] ? 1 : 0;
 
-    return { maskBytes, maskW, maskH, iou: iouScores[bestIdx], decoderMs };
+    const polygon = extractPolygonFromMask(maskBytes, maskW, maskH);
+    return { polygon, iou: iouScores[bestIdx], mask_width: maskW, mask_height: maskH, encoder_ms, decoder_ms };
   });
 }
 
-// ----- Polygon extraction -----------------------------------------------
-
 function extractPolygonFromMask(mask: Uint8Array, w: number, h: number): [number, number][] {
-  // Find leftmost-topmost pixel as start.
   let sx = -1, sy = -1;
   outer: for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -261,20 +163,4 @@ function douglasPeucker(pts: [number, number][], epsilon: number): [number, numb
     return [pts[start], pts[end]];
   }
   return recurse(0, pts.length - 1);
-}
-
-export async function segmentDesign(
-  designId: string,
-  photoBuffer: Buffer,
-  req: SegmentRequest,
-): Promise<SegmentResult> {
-  const hadEmbedding = !!readEmbedding(designId);
-  const t0 = Date.now();
-  const cached = await ensureEmbedding(designId, photoBuffer);
-  const encoderMs = hadEmbedding ? null : Date.now() - t0;
-
-  const { maskBytes, maskW, maskH, iou, decoderMs } = await segmentWithEmbedding(cached, req);
-  const polygon = extractPolygonFromMask(maskBytes, maskW, maskH);
-
-  return { polygon, iou, mask_width: maskW, mask_height: maskH, encoder_ms: encoderMs, decoder_ms: decoderMs };
 }
