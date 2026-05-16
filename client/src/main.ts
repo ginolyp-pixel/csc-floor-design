@@ -222,21 +222,82 @@ async function init(): Promise<void> {
   btn3d.addEventListener("click", () => void setMode("3d"));
   btnPhoto.addEventListener("click", () => void setMode("photo"));
 
+  // Saved design deep-link: /d/<8-char-id>. Hydrate the photo viewport
+  // before the user can interact with anything.
+  const savedDesignMatch = window.location.pathname.match(/^\/d\/([0-9A-Za-z]{8})$/);
+  const hydrationPromise = savedDesignMatch
+    ? hydrateSavedDesign(savedDesignMatch[1]!).catch((err) => {
+        console.error("Hydration failed", err);
+        if (loading) {
+          const msg = err?.message === "design-not-found" ? "We couldn't find that saved design — the link may be wrong or it has been removed."
+            : err?.message === "design-expired" ? "This saved design has expired and is no longer available."
+            : "Couldn't load that saved design. Try a fresh start.";
+          loading.innerHTML = `<span class="fd-loading__label">${msg}</span>`;
+          window.setTimeout(() => loading.remove(), 4500);
+        }
+      })
+    : Promise.resolve();
+
+  async function hydrateSavedDesign(designId: string): Promise<void> {
+    if (loading) {
+      loading.innerHTML = `<span class="fd-loading__spinner" aria-hidden="true"></span><span class="fd-loading__label">Loading your saved design…</span>`;
+    }
+    const metaRes = await fetch(`/api/designs/${designId}`);
+    if (metaRes.status === 404) throw new Error("design-not-found");
+    if (metaRes.status === 410) throw new Error("design-expired");
+    if (!metaRes.ok) throw new Error("design-fetch-failed");
+    const meta = (await metaRes.json()) as {
+      flake_id: string | null;
+      mask_data: { polygon: [number, number][] } | null;
+      photo_url: string | null;
+    };
+
+    if (meta.flake_id) {
+      const finish = getFinishById(meta.flake_id);
+      if (finish) selectFinish(finish);
+    }
+
+    if (meta.photo_url) {
+      const photoRes = await fetch(meta.photo_url);
+      if (!photoRes.ok) throw new Error("photo-fetch-failed");
+      const photoBlob = await photoRes.blob();
+      await setMode("photo");
+      const polygon = meta.mask_data?.polygon ?? [];
+      await photo!.loadDesign({ photoBlob, polygon, closed: polygon.length >= 3 });
+    }
+  }
+
   // Lazy-load Three.js + scene module after first paint so the flake grid
   // and search render immediately, before the ~600 KB graphics chunk arrives.
-  try {
+  // Runs in parallel with hydration so /d/:id deep-links don't block on 3D.
+  const garagePromise = (async (): Promise<void> => {
     const { mountGarage } = await import("./scene/garage");
     garage = mountGarage(viewport);
-    await garage.setFinish(initial);
-  } catch (err) {
-    console.error("Failed to mount 3D scene", err);
-    if (loading) {
-      loading.innerHTML = `<span class="fd-loading__label">3D preview failed to load. Try refreshing — if the problem continues, this device may not support WebGL.</span>`;
+    await garage.setFinish(selectedFinish);
+  })();
+
+  // If we deep-linked into a saved design, the overlay clears as soon as
+  // hydration is done — the 3D scene continues mounting in the background
+  // and will be ready when the user switches to that tab.
+  if (savedDesignMatch) {
+    await hydrationPromise;
+    loading?.remove();
+    garagePromise.catch((err) => console.error("3D scene mount failed (deferred)", err));
+  } else {
+    try {
+      await garagePromise;
+    } catch (err) {
+      console.error("Failed to mount 3D scene", err);
+      if (loading) {
+        loading.innerHTML = `<span class="fd-loading__label">3D preview failed to load. Try refreshing — if the problem continues, this device may not support WebGL.</span>`;
+      }
+      return;
     }
-    return;
-  } finally {
     loading?.remove();
   }
+
+  // Cam toggle wiring needs the garage to exist; bail if mount failed.
+  if (!garage) return;
 
   if (camToggle) {
     const labelEl = camToggle.querySelector(".fd-cam-toggle__label") as HTMLElement | null;

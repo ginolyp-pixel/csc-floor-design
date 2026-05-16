@@ -41,6 +41,15 @@ if (existsSync(clientDist)) {
     prefix: "/",
     index: ["index.html"],
   });
+
+  // Saved-design deep links — serve the SPA shell, client-side hydrates
+  // from /api/designs/:id. ID format is 8 alphanumeric chars (storage.ts).
+  app.get<{ Params: { id: string } }>("/d/:id", (req, reply) => {
+    if (!/^[0-9A-Za-z]{8}$/.test(req.params.id)) {
+      return reply.code(404).send({ error: "not found" });
+    }
+    return reply.sendFile("index.html");
+  });
 } else {
   app.log.warn(`client bundle not found at ${clientDist} — run \`npm run build\``);
   app.get("/", async () => ({

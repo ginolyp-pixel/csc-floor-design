@@ -1,9 +1,18 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { MultipartFile } from "@fastify/multipart";
+import { createReadStream, statSync } from "node:fs";
+import { extname } from "node:path";
 import { FLOOR_FINISHES } from "../../client/src/catalog.ts";
 import { env } from "../env.ts";
-import { insertDesign } from "../db.ts";
+import { getDesign, insertDesign } from "../db.ts";
 import { newDesignId, writePhoto, writePreview } from "../storage.ts";
+
+const PHOTO_EXT_TO_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
 
 const VALID_FLAKE_IDS = new Set(FLOOR_FINISHES.map((f) => f.id));
 
@@ -152,6 +161,70 @@ async function postDesign(req: FastifyRequest, reply: FastifyReply): Promise<voi
   });
 }
 
+type IdParams = { id: string };
+
+const ID_RE = /^[0-9A-Za-z]{8}$/;
+
+function validateId(id: string): boolean {
+  return ID_RE.test(id);
+}
+
+async function getDesignMeta(req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply): Promise<void> {
+  const { id } = req.params;
+  if (!validateId(id)) return reply.code(400).send({ error: "invalid id" });
+
+  const row = getDesign(id);
+  if (!row) return reply.code(404).send({ error: "not found" });
+  if (row.expires_at < Date.now()) return reply.code(410).send({ error: "expired" });
+
+  reply.send({
+    id: row.id,
+    created_at: row.created_at,
+    expires_at: row.expires_at,
+    flake_id: row.flake_id,
+    mask_data: row.mask_data ? JSON.parse(row.mask_data) : null,
+    settings: row.settings_json ? JSON.parse(row.settings_json) : null,
+    photo_url: row.photo_path ? `/api/designs/${row.id}/photo` : null,
+    preview_url: row.preview_path ? `/api/designs/${row.id}/preview` : null,
+  });
+}
+
+function streamFile(reply: FastifyReply, path: string, mime: string): void {
+  try {
+    const stats = statSync(path);
+    reply
+      .header("Content-Type", mime)
+      .header("Content-Length", stats.size)
+      .header("Cache-Control", "public, max-age=31536000, immutable")
+      .send(createReadStream(path));
+  } catch {
+    reply.code(404).send({ error: "file missing" });
+  }
+}
+
+async function getDesignPhoto(req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply): Promise<void> {
+  const { id } = req.params;
+  if (!validateId(id)) return reply.code(400).send({ error: "invalid id" });
+  const row = getDesign(id);
+  if (!row?.photo_path) return reply.code(404).send({ error: "not found" });
+  if (row.expires_at < Date.now()) return reply.code(410).send({ error: "expired" });
+  const ext = extname(row.photo_path).toLowerCase();
+  const mime = PHOTO_EXT_TO_MIME[ext] ?? "application/octet-stream";
+  streamFile(reply, row.photo_path, mime);
+}
+
+async function getDesignPreview(req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply): Promise<void> {
+  const { id } = req.params;
+  if (!validateId(id)) return reply.code(400).send({ error: "invalid id" });
+  const row = getDesign(id);
+  if (!row?.preview_path) return reply.code(404).send({ error: "not found" });
+  if (row.expires_at < Date.now()) return reply.code(410).send({ error: "expired" });
+  streamFile(reply, row.preview_path, "image/png");
+}
+
 export async function registerDesignRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/designs", postDesign);
+  app.get<{ Params: IdParams }>("/api/designs/:id", getDesignMeta);
+  app.get<{ Params: IdParams }>("/api/designs/:id/photo", getDesignPhoto);
+  app.get<{ Params: IdParams }>("/api/designs/:id/preview", getDesignPreview);
 }

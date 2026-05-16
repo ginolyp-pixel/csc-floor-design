@@ -45,7 +45,15 @@ export type PhotoMode = {
   /** Returns a fresh canvas of the current composite WITHOUT the polygon
    *  overlay/markers — for clean export. Returns null if no photo is loaded. */
   captureCleanCanvas(): HTMLCanvasElement | null;
+  /** Hydrate from a saved design: load photo blob + restore polygon. */
+  loadDesign(input: LoadDesignInput): Promise<void>;
   dispose(): void;
+};
+
+export type LoadDesignInput = {
+  photoBlob: Blob;
+  polygon: Point2[];
+  closed: boolean;
 };
 
 function paintSolidFallbackImageData(hex: string, size = 256): ImageData {
@@ -596,6 +604,29 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
     },
     hasPhoto: () => workingPhoto !== null,
     captureCleanCanvas,
+    loadDesign: async ({ photoBlob, polygon: poly, closed }) => {
+      const url = URL.createObjectURL(photoBlob);
+      try {
+        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+          const i = new Image();
+          i.onload = () => resolve(i);
+          i.onerror = () => reject(new Error("Could not decode saved photo"));
+          i.src = url;
+        });
+        const { data } = imageToWorkingData(img, MAX_PHOTO_DIM);
+        workingPhoto = data;
+        polygon.length = 0;
+        for (const p of poly) polygon.push([p[0], p[1]]);
+        polygonClosed = closed && polygon.length >= 3;
+        cursorPos = null;
+        refreshStatus();
+        updateToolbarState();
+        updateHintVisibility();
+        if (active) drawFrame();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    },
     dispose: () => {
       toolbar.file.removeEventListener("change", onFileChange);
       toolbar.undo.removeEventListener("click", onUndo);
