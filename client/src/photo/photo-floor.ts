@@ -306,15 +306,6 @@ export type PhotoFloorPolygonInput = {
    * off as a hard outline. Default 8 px.
    */
   featherPx?: number;
-  /**
-   * 0..1 strength of fake vertical perspective: flake tiles shrink near the
-   * top of the polygon (perceived "back" of the floor) and grow near the
-   * bottom (perceived "front"). 0 = pure screen-space tiling (old behavior),
-   * 1 = far-back tiles are ~⅓ the size of front tiles. Default 0.55.
-   * Strict 2D approximation — doesn't account for horizontal vanishing
-   * points, but handles the typical garage straight-on shot well.
-   */
-  perspectiveStrength?: number;
 };
 
 /**
@@ -337,7 +328,6 @@ export function compositeFlakeOnPhotoPolygon(
   const glossStrength = input.glossStrength ?? 0.12;
   const aoStrength = input.aoStrength ?? 0.35;
   const featherPx = Math.max(0, input.featherPx ?? 8);
-  const perspectiveStrength = Math.max(0, Math.min(1, input.perspectiveStrength ?? 0.55));
   const w = photoData.width;
   const h = photoData.height;
   const fw = flakeData.width;
@@ -373,13 +363,6 @@ export function compositeFlakeOnPhotoPolygon(
     // outline (where overhead light would catch the gloss), fading down.
     const yNorm = (y - minY) / polyH;
     const gloss = glossStrength * Math.max(0, 1 - yNorm * 1.4);
-
-    // Fake vertical perspective: flake tiles shrink toward the top of the
-    // polygon (back of the floor). minScale at the far back, 1.0 at the
-    // front. perspectiveStrength=0 leaves tiles uniform (old behavior).
-    const minScale = 1 - perspectiveStrength * 0.65;
-    const tileScale = minScale + (1 - minScale) * yNorm;
-    const effTilePx = tilePx * tileScale;
     // Vertical AO factor: 1 in the middle, 0 right at the top/bottom edge.
     const dyTop = y - minY;
     const dyBot = maxY - y;
@@ -392,8 +375,8 @@ export function compositeFlakeOnPhotoPolygon(
       const xStart = Math.max(0, Math.ceil(segLeft));
       const xEnd = Math.min(w - 1, Math.floor(segRight));
       for (let x = xStart; x <= xEnd; x++) {
-        const u = x / effTilePx;
-        const v = y / effTilePx;
+        const u = x / tilePx;
+        const v = y / tilePx;
         const [fr, fg, fb] = sampleBilinear(flakeData.data, fw, fh, u, v);
         const i = (y * w + x) * 4;
         const pr = pd[i]! / 255;
