@@ -157,8 +157,19 @@ export async function segmentWithEmbedding(
       [1, 1, req.labels.length],
     );
 
+    // transformers.js's SlimSAM forward() always wants pixel_values as input.
+    // When image_embeddings is provided the model SHOULD use the cache and
+    // not actually look at pixel_values — pass a zero tensor at the expected
+    // 1024×1024×3 shape so the input-presence check passes.
+    const pixelValues = new tx.Tensor(
+      "float32",
+      new Float32Array(3 * 1024 * 1024),
+      [1, 3, 1024, 1024],
+    );
+
     const t0 = Date.now();
     const outputs = await model({
+      pixel_values: pixelValues,
       image_embeddings: embTensor,
       input_points: inputPoints,
       input_labels: inputLabels,
