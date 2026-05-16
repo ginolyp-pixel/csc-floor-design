@@ -46,8 +46,10 @@ const insertStmt = db.prepare(`
 `);
 
 const selectStmt = db.prepare(`SELECT * FROM designs WHERE id = ?`);
-
-const purgeStmt = db.prepare(`DELETE FROM designs WHERE expires_at < ?`);
+const expiredStmt = db.prepare(`SELECT id, photo_path, preview_path FROM designs WHERE expires_at < ?`);
+const deleteStmt = db.prepare(`DELETE FROM designs WHERE id = ?`);
+const countActiveStmt = db.prepare(`SELECT COUNT(*) as n FROM designs WHERE expires_at >= ?`);
+const countExpiredStmt = db.prepare(`SELECT COUNT(*) as n FROM designs WHERE expires_at < ?`);
 
 export function insertDesign(row: DesignRow): void {
   insertStmt.run(row);
@@ -57,7 +59,24 @@ export function getDesign(id: string): DesignRow | undefined {
   return selectStmt.get(id) as DesignRow | undefined;
 }
 
-export function purgeExpiredDesigns(nowMs: number = Date.now()): number {
-  const result = purgeStmt.run(nowMs);
-  return result.changes;
+export type ExpiredRow = { id: string; photo_path: string | null; preview_path: string | null };
+
+export function listExpiredDesigns(nowMs: number = Date.now()): ExpiredRow[] {
+  return expiredStmt.all(nowMs) as ExpiredRow[];
+}
+
+export function deleteDesignRow(id: string): void {
+  deleteStmt.run(id);
+}
+
+export function countActiveDesigns(nowMs: number = Date.now()): number {
+  return (countActiveStmt.get(nowMs) as { n: number }).n;
+}
+
+export function countExpiredDesigns(nowMs: number = Date.now()): number {
+  return (countExpiredStmt.get(nowMs) as { n: number }).n;
+}
+
+export function databaseFilePath(): string {
+  return dbPath;
 }

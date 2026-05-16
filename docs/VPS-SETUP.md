@@ -52,6 +52,26 @@ pm2 startup systemd -u root --hp /root
 > `designer.sqlite`, uploaded customer photos, and composed previews.
 > Deploys never touch it; back it up if you care about saved designs.
 
+### Data inspection + backup
+
+The app runs a TTL purge every 24h (and again 60s after every boot)
+to delete designs older than `DESIGN_TTL_DAYS` (default: 90). Photo +
+preview files and DB rows are removed together.
+
+Quick status check anytime:
+
+```bash
+curl -sS http://127.0.0.1:3001/api/stats | python3 -m json.tool
+```
+
+Returns active/expired counts, on-disk byte totals, and DB size.
+
+Backup the persistent data root (small enough to nightly-rsync):
+
+```bash
+tar -C /var/lib -czf /var/backups/csc-designer-$(date +%F).tar.gz csc-designer/
+```
+
 Verify it's listening:
 
 ```bash
