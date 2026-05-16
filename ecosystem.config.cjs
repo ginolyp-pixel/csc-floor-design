@@ -14,6 +14,7 @@ module.exports = {
         NODE_ENV: "production",
         HOST: "127.0.0.1",
         PORT: "3001",
+        DATA_DIR: "/var/lib/csc-designer",
       },
       error_file: "/var/log/csc-designer/error.log",
       out_file: "/var/log/csc-designer/out.log",

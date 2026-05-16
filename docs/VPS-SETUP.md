@@ -41,11 +41,16 @@ cp .env.example .env
 npm ci
 npm run build
 mkdir -p /var/log/csc-designer
+mkdir -p /var/lib/csc-designer        # SQLite + uploaded photos + previews
 pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup systemd -u root --hp /root
 # Copy/paste the command pm2 prints, then run `pm2 save` once more.
 ```
+
+> `/var/lib/csc-designer/` is the **persistent data root** — it holds
+> `designer.sqlite`, uploaded customer photos, and composed previews.
+> Deploys never touch it; back it up if you care about saved designs.
 
 Verify it's listening:
 

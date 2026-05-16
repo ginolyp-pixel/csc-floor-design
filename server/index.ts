@@ -1,9 +1,11 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
+import fastifyMultipart from "@fastify/multipart";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { env } from "./env.ts";
+import { registerDesignRoutes } from "./routes/designs.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const clientDist = resolve(__dirname, "../dist/client");
@@ -16,12 +18,22 @@ const app = Fastify({
   bodyLimit: 15 * 1024 * 1024,
 });
 
+await app.register(fastifyMultipart, {
+  limits: {
+    fileSize: env.MAX_PHOTO_BYTES,
+    files: 2,
+    fields: 8,
+  },
+});
+
 app.get("/api/health", async () => ({
   status: "ok",
-  version: "0.1.0",
+  version: "0.2.0",
   uptime: process.uptime(),
   timestamp: Date.now(),
 }));
+
+await registerDesignRoutes(app);
 
 if (existsSync(clientDist)) {
   await app.register(fastifyStatic, {
