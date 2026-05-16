@@ -140,11 +140,12 @@ export async function segmentWithEmbedding(
   return runQueued(async () => {
     const { model, processor, tx } = await loadModel();
 
-    const embTensor = new tx.Tensor(
-      "float32",
-      new Float32Array(cached.embeddings_bin.buffer, cached.embeddings_bin.byteOffset, cached.embeddings_bin.byteLength / 4),
-      cached.embeddings_shape,
-    );
+    // Copy into a fresh Float32Array. Our packed header puts the bin section
+    // at byteOffset 38, which is not a multiple of 4 — direct typed-array
+    // construction errors with "start offset should be a multiple of 4".
+    const float32Buf = new Float32Array(cached.embeddings_bin.byteLength / 4);
+    new Uint8Array(float32Buf.buffer).set(cached.embeddings_bin);
+    const embTensor = new tx.Tensor("float32", float32Buf, cached.embeddings_shape);
 
     const inputPoints = new tx.Tensor(
       "float32",
