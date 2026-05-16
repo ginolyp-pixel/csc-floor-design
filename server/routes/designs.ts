@@ -6,6 +6,7 @@ import { FLOOR_FINISHES } from "../../client/src/catalog.ts";
 import { env } from "../env.ts";
 import { getDesign, insertDesign } from "../db.ts";
 import { newDesignId, writePhoto, writePreview } from "../storage.ts";
+import { segmentDesign } from "../services/sam.ts";
 
 const PHOTO_EXT_TO_MIME: Record<string, string> = {
   ".jpg": "image/jpeg",
@@ -226,9 +227,64 @@ async function getDesignPreview(req: FastifyRequest<{ Params: IdParams }>, reply
   sendFileBuffer(reply, row.preview_path, "image/png");
 }
 
+type SegmentBody = {
+  points?: unknown;
+  labels?: unknown;
+};
+
+async function postDesignSegment(
+  req: FastifyRequest<{ Params: IdParams; Body: SegmentBody }>,
+  reply: FastifyReply,
+): Promise<void> {
+  const { id } = req.params;
+  if (!validateId(id)) return reply.code(400).send({ error: "invalid id" });
+
+  const row = getDesign(id);
+  if (!row?.photo_path) return reply.code(404).send({ error: "not found" });
+  if (row.expires_at < Date.now()) return reply.code(410).send({ error: "expired" });
+
+  const { points: rawPoints, labels: rawLabels } = req.body ?? {};
+  if (!Array.isArray(rawPoints) || rawPoints.length === 0 || rawPoints.length > 32) {
+    return reply.code(400).send({ error: "points must be a non-empty array (max 32)" });
+  }
+  const points: [number, number][] = [];
+  for (const p of rawPoints) {
+    if (!Array.isArray(p) || p.length !== 2 || typeof p[0] !== "number" || typeof p[1] !== "number" || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) {
+      return reply.code(400).send({ error: "each point must be [number, number]" });
+    }
+    points.push([p[0], p[1]]);
+  }
+  const labels: number[] = [];
+  if (Array.isArray(rawLabels)) {
+    if (rawLabels.length !== points.length) return reply.code(400).send({ error: "labels length must match points" });
+    for (const l of rawLabels) {
+      if (l !== 0 && l !== 1) return reply.code(400).send({ error: "each label must be 0 or 1" });
+      labels.push(l);
+    }
+  } else {
+    for (let i = 0; i < points.length; i++) labels.push(1);
+  }
+
+  let photoBuffer: Buffer;
+  try {
+    photoBuffer = readFileSync(row.photo_path);
+  } catch {
+    return reply.code(500).send({ error: "photo file unreadable" });
+  }
+
+  try {
+    const result = await segmentDesign(id, photoBuffer, { points, labels });
+    reply.send(result);
+  } catch (err) {
+    req.log.error({ err }, "segment failed");
+    reply.code(500).send({ error: (err as Error).message });
+  }
+}
+
 export async function registerDesignRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/designs", postDesign);
   app.get<{ Params: IdParams }>("/api/designs/:id", getDesignMeta);
   app.get<{ Params: IdParams }>("/api/designs/:id/photo", getDesignPhoto);
   app.get<{ Params: IdParams }>("/api/designs/:id/preview", getDesignPreview);
+  app.post<{ Params: IdParams; Body: SegmentBody }>("/api/designs/:id/segment", postDesignSegment);
 }

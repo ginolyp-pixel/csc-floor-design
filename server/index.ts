@@ -30,7 +30,7 @@ await app.register(fastifyMultipart, {
 
 app.get("/api/health", async () => ({
   status: "ok",
-  version: "0.2.1",
+  version: "0.3.0",
   uptime: process.uptime(),
   timestamp: Date.now(),
 }));
