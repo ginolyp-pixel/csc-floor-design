@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>Estimator Dashboard · CSC Floor Design</title>
+<style>
+  :root {
+    --bg: #f3f4f6;
+    --surface: #ffffff;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --accent: #b53129;
+    --accent-ink: #ffffff;
+    --border: #e5e7eb;
+    --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.08);
+    --radius: 8px;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: 0.5px; text-transform: uppercase; }
+  header .meta { font-size: 13px; color: var(--muted); }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 80px; }
+
+  button, .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); border-radius: var(--radius); cursor: pointer; font-size: 14px; text-decoration: none; }
+  button:hover, .btn:hover { background: #f9fafb; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.primary:hover { background: #9b261f; }
+  button.subtle { background: transparent; border-color: transparent; color: var(--muted); }
+  button.subtle:hover { background: #f3f4f6; color: var(--ink); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
+
+  /* Login */
+  #login { max-width: 380px; margin: 60px auto; }
+  #login h2 { margin: 0 0 16px; font-size: 18px; }
+  #login p.hint { color: var(--muted); font-size: 14px; margin: 0 0 20px; }
+  #login label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  #login input[type=password] { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 15px; }
+  #login .actions { margin-top: 18px; }
+  #login .error { color: var(--accent); font-size: 14px; margin: 12px 0 0; min-height: 1em; }
+
+  /* Dashboard */
+  .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }
+  .toolbar .summary { color: var(--muted); font-size: 14px; }
+  .toolbar input[type=search] { padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 14px; width: 220px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+
+  .design { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); display: flex; flex-direction: column; }
+  .design .thumb-wrap { position: relative; background: #111827; aspect-ratio: 4 / 3; overflow: hidden; }
+  .design img.thumb { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .design .no-thumb { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #9ca3af; font-size: 13px; }
+  .design .body { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .design .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .design .flake { font-weight: 600; font-size: 15px; }
+  .design .id { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .design .date { font-size: 13px; color: var(--muted); }
+  .design .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .design .actions button, .design .actions a { font-size: 12px; padding: 6px 10px; }
+  .design .actions .flash { font-size: 12px; color: #059669; align-self: center; }
+
+  .empty, .error-banner { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .error-banner { color: var(--accent); }
+
+  #not-configured { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 16px 20px; border-radius: var(--radius); }
+</style>
+</head>
+<body>
+<header>
+  <h1>CSC · Estimator Dashboard</h1>
+  <div class="meta">
+    <span id="header-meta"></span>
+    <button id="logout" class="subtle" hidden>Log out</button>
+  </div>
+</header>
+<main>
+  <div id="loading" class="empty">Loading…</div>
+  <div id="not-configured" hidden>The estimator dashboard isn't enabled on this server. Set <code>ESTIMATOR_PASSWORD</code> in <code>.env</code> and restart the app.</div>
+
+  <section id="login" class="card" hidden>
+    <h2>Sign in</h2>
+    <p class="hint">Enter the dashboard password to view recent saved designs.</p>
+    <form id="login-form">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required />
+      <div class="actions">
+        <button type="submit" class="primary">Sign in</button>
+      </div>
+      <p class="error" id="login-error"></p>
+    </form>
+  </section>
+
+  <section id="dashboard" hidden>
+    <div class="toolbar">
+      <div class="summary" id="summary"></div>
+      <input type="search" id="filter" placeholder="Filter by ID or flake…" />
+    </div>
+    <div id="grid" class="grid"></div>
+    <p id="empty" class="empty" hidden>No saved designs yet.</p>
+    <p id="error" class="error-banner" hidden></p>
+  </section>
+</main>
+
+<script type="module">
+const $ = (id) => document.getElementById(id);
+
+const loadingEl = $("loading");
+const notConfiguredEl = $("not-configured");
+const loginEl = $("login");
+const loginFormEl = $("login-form");
+const loginErrorEl = $("login-error");
+const passwordEl = $("password");
+const dashboardEl = $("dashboard");
+const summaryEl = $("summary");
+const gridEl = $("grid");
+const emptyEl = $("empty");
+const errorEl = $("error");
+const headerMetaEl = $("header-meta");
+const logoutBtn = $("logout");
+const filterEl = $("filter");
+
+const ORIGIN = window.location.origin;
+let allDesigns = [];
+
+function show(el) { el.hidden = false; }
+function hide(el) { el.hidden = true; }
+
+function formatDate(ms) {
+  const d = new Date(ms);
+  const now = Date.now();
+  const diffMs = now - ms;
+  const sec = Math.round(diffMs / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatDateAbsolute(ms) {
+  return new Date(ms).toLocaleString();
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); return true; } catch { return false; }
+    finally { document.body.removeChild(ta); }
+  }
+}
+
+async function init() {
+  let status;
+  try {
+    const res = await fetch("/api/admin/status");
+    status = await res.json();
+  } catch {
+    hide(loadingEl);
+    errorEl.textContent = "Couldn't reach the server. Try again in a moment.";
+    show(errorEl);
+    show(dashboardEl);
+    return;
+  }
+  hide(loadingEl);
+  if (!status.configured) {
+    show(notConfiguredEl);
+    return;
+  }
+  if (status.authenticated) {
+    await renderDashboard();
+  } else {
+    show(loginEl);
+    passwordEl.focus();
+  }
+}
+
+loginFormEl.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  loginErrorEl.textContent = "";
+  const password = passwordEl.value;
+  if (!password) return;
+  const submitBtn = loginFormEl.querySelector('button[type=submit]');
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Signing in…";
+  try {
+    const res = await fetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (!res.ok) {
+      loginErrorEl.textContent = res.status === 401 ? "Wrong password." : `Sign-in failed (${res.status}).`;
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Sign in";
+      return;
+    }
+    passwordEl.value = "";
+    hide(loginEl);
+    await renderDashboard();
+  } catch (err) {
+    loginErrorEl.textContent = "Couldn't reach the server. Try again.";
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Sign in";
+  }
+});
+
+logoutBtn.addEventListener("click", async () => {
+  await fetch("/api/admin/logout", { method: "POST" });
+  hide(dashboardEl);
+  hide(logoutBtn);
+  headerMetaEl.textContent = "";
+  show(loginEl);
+  passwordEl.focus();
+});
+
+async function renderDashboard() {
+  show(dashboardEl);
+  show(logoutBtn);
+  summaryEl.textContent = "Loading designs…";
+  hide(emptyEl);
+  hide(errorEl);
+  gridEl.innerHTML = "";
+  try {
+    const res = await fetch("/api/admin/designs");
+    if (res.status === 401) {
+      hide(dashboardEl);
+      hide(logoutBtn);
+      show(loginEl);
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    allDesigns = body.designs ?? [];
+  } catch (err) {
+    summaryEl.textContent = "";
+    errorEl.textContent = `Couldn't load designs: ${err.message}`;
+    show(errorEl);
+    return;
+  }
+  applyFilter();
+}
+
+filterEl.addEventListener("input", applyFilter);
+
+function applyFilter() {
+  const q = filterEl.value.trim().toLowerCase();
+  const visible = q
+    ? allDesigns.filter((d) =>
+        d.id.toLowerCase().includes(q) ||
+        (d.flake_name ?? "").toLowerCase().includes(q) ||
+        (d.flake_id ?? "").toLowerCase().includes(q),
+      )
+    : allDesigns;
+  summaryEl.textContent = q
+    ? `${visible.length} of ${allDesigns.length} match "${q}"`
+    : `${allDesigns.length} design${allDesigns.length === 1 ? "" : "s"} · most recent first`;
+  headerMetaEl.textContent = `${allDesigns.length} total · `;
+  renderGrid(visible);
+}
+
+function renderGrid(designs) {
+  gridEl.innerHTML = "";
+  if (designs.length === 0) {
+    show(emptyEl);
+    emptyEl.textContent = allDesigns.length === 0
+      ? "No saved designs yet."
+      : "No designs match that filter.";
+    return;
+  }
+  hide(emptyEl);
+
+  for (const d of designs) {
+    const card = document.createElement("article");
+    card.className = "design";
+
+    const thumbWrap = document.createElement("div");
+    thumbWrap.className = "thumb-wrap";
+    const thumbSrc = d.preview_url || d.photo_url;
+    if (thumbSrc) {
+      const img = document.createElement("img");
+      img.className = "thumb";
+      img.src = thumbSrc;
+      img.alt = `Design ${d.id}`;
+      img.loading = "lazy";
+      thumbWrap.appendChild(img);
+    } else {
+      const ph = document.createElement("div");
+      ph.className = "no-thumb";
+      ph.textContent = "no preview";
+      thumbWrap.appendChild(ph);
+    }
+    card.appendChild(thumbWrap);
+
+    const body = document.createElement("div");
+    body.className = "body";
+
+    const top = document.createElement("div");
+    top.className = "top";
+    const flake = document.createElement("span");
+    flake.className = "flake";
+    flake.textContent = d.flake_name ?? d.flake_id ?? "—";
+    const id = document.createElement("span");
+    id.className = "id";
+    id.textContent = d.id;
+    top.appendChild(flake);
+    top.appendChild(id);
+    body.appendChild(top);
+
+    const date = document.createElement("span");
+    date.className = "date";
+    date.textContent = formatDate(d.created_at);
+    date.title = formatDateAbsolute(d.created_at);
+    body.appendChild(date);
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.textContent = "Copy link";
+    const flash = document.createElement("span");
+    flash.className = "flash";
+    copyBtn.addEventListener("click", async () => {
+      const url = `${ORIGIN}${d.share_url}`;
+      const ok = await copyToClipboard(url);
+      flash.textContent = ok ? "Copied!" : "Copy failed";
+      setTimeout(() => { flash.textContent = ""; }, 1800);
+    });
+    actions.appendChild(copyBtn);
+
+    const openLink = document.createElement("a");
+    openLink.href = d.share_url;
+    openLink.target = "_blank";
+    openLink.rel = "noopener";
+    openLink.className = "btn";
+    openLink.textContent = "Open";
+    actions.appendChild(openLink);
+
+    actions.appendChild(flash);
+    body.appendChild(actions);
+
+    card.appendChild(body);
+    gridEl.appendChild(card);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
