@@ -12,6 +12,12 @@ import {
 } from "./catalog";
 import type { Garage } from "./scene/garage";
 import type { PhotoMode } from "./photo/photo";
+import {
+  composeBrandedCanvas,
+  copyTextToClipboard,
+  downloadCanvasAsPng,
+  buildScreenshotFilename,
+} from "./lib/export";
 
 const QUOTE_BASE = "https://www.concreteshieldcoatingsinc.com/contact";
 
@@ -87,13 +93,15 @@ async function init(): Promise<void> {
   const photoResetOutline = document.getElementById("fd-photo-reset-outline") as HTMLButtonElement | null;
   const photoClear = document.getElementById("fd-photo-clear") as HTMLButtonElement | null;
   const photoStatus = document.getElementById("fd-photo-status");
+  const shareBtn = document.getElementById("fd-share") as HTMLButtonElement | null;
+  const saveBtn = document.getElementById("fd-save") as HTMLButtonElement | null;
 
   if (
     !viewport || !sectionStandard || !sectionCustom || !gridStandard || !gridCustom ||
     !search || !preview || !quoteLink ||
     !btn3d || !btnPhoto || !photoCanvas || !photoToolbar ||
     !photoFile || !photoUndo || !photoDone || !photoResetOutline ||
-    !photoClear || !photoStatus
+    !photoClear || !photoStatus || !shareBtn || !saveBtn
   ) {
     console.error("Floor Designer: missing required DOM nodes");
     return;
@@ -246,6 +254,54 @@ async function init(): Promise<void> {
     });
     updateCamUi();
   }
+
+  // -----------------------------------------------------------------
+  // Share + Save image
+  // -----------------------------------------------------------------
+  const flashButton = (btn: HTMLButtonElement, text: string, ms = 1800): void => {
+    const original = btn.dataset.originalText ?? btn.textContent ?? "";
+    if (!btn.dataset.originalText) btn.dataset.originalText = original;
+    btn.textContent = text;
+    btn.classList.add("fd-btn--flash");
+    window.setTimeout(() => {
+      btn.textContent = btn.dataset.originalText ?? original;
+      btn.classList.remove("fd-btn--flash");
+    }, ms);
+  };
+
+  shareBtn.addEventListener("click", async () => {
+    const ok = await copyTextToClipboard(window.location.href);
+    flashButton(shareBtn, ok ? "Link copied!" : "Copy failed — long-press to copy");
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    let source: HTMLCanvasElement | null = null;
+    if (mode === "photo") {
+      source = photo?.captureCleanCanvas() ?? null;
+      if (!source) {
+        flashButton(saveBtn, "Upload a photo first");
+        return;
+      }
+    } else if (garage) {
+      source = garage.captureCanvas();
+    }
+    if (!source) {
+      flashButton(saveBtn, "Nothing to save yet");
+      return;
+    }
+    try {
+      const branded = composeBrandedCanvas({
+        source,
+        finishName: selectedFinish.name,
+        finishCategory: selectedFinish.category,
+      });
+      await downloadCanvasAsPng(branded, buildScreenshotFilename(selectedFinish.id));
+      flashButton(saveBtn, "Saved");
+    } catch (err) {
+      console.error("Save image failed", err);
+      flashButton(saveBtn, "Save failed — try again");
+    }
+  });
 }
 
 if (document.readyState === "loading") {

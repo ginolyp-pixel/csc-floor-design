@@ -479,6 +479,35 @@
   color: #1a1d22;
 }
 
+/* Brief visual confirmation after Share/Save buttons fire. */
+.fd-btn--flash {
+  background: #2ecc71 !important;
+  border-color: #28b463 !important;
+  color: #fff !important;
+}
+
+/* Sticky mode-bar on phones so users keep mode toggle reachable while
+   scrolling the long sidebar. The shell's banner-intro stays scrollable
+   above; the bar stays pinned just below it. */
+@media (max-width: 767px) {
+  .fd-mode-bar {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: #f7f7f7;
+    padding-top: 8px;
+  }
+  .fd-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .fd-actions .fd-btn {
+    width: 100%;
+    text-align: center;
+  }
+}
+
 /* ============================================================
    Mobile (≤767px) — matches the site's breakpoint in main.css.
    Goals: prevent horizontal overflow, make the 3D viewport

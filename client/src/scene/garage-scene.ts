@@ -442,7 +442,7 @@ export function createGarageScene(container: HTMLElement): GarageContext {
   const camera = new PerspectiveCamera(44, 1, 0.1, 100);
   camera.position.set(0, 1.55, 7.4);
 
-  const renderer = new WebGLRenderer({ antialias: true, alpha: false });
+  const renderer = new WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = ACESFilmicToneMapping;

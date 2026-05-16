@@ -21,6 +21,7 @@ export type Garage = {
   setCameraMode(mode: CameraMode): void;
   getCameraMode(): CameraMode;
   setPaused(paused: boolean): void;
+  captureCanvas(): HTMLCanvasElement;
   dispose(): void;
 };
 
@@ -67,6 +68,7 @@ export function mountGarage(container: HTMLElement): Garage {
     setCameraMode: (m) => ctx.setCameraMode(m),
     getCameraMode: () => ctx.getCameraMode(),
     setPaused: (p) => ctx.setPaused(p),
+    captureCanvas: () => ctx.renderer.domElement,
     dispose: () => ctx.dispose(),
   };
 }

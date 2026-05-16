@@ -42,6 +42,9 @@ export type PhotoMode = {
   setFinish(finish: FloorFinish): Promise<void>;
   setActive(active: boolean): void;
   hasPhoto(): boolean;
+  /** Returns a fresh canvas of the current composite WITHOUT the polygon
+   *  overlay/markers — for clean export. Returns null if no photo is loaded. */
+  captureCleanCanvas(): HTMLCanvasElement | null;
   dispose(): void;
 };
 
@@ -526,6 +529,54 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
     if (active) drawFrame();
   })();
 
+  const captureCleanCanvas = (): HTMLCanvasElement | null => {
+    if (!workingPhoto) return null;
+    const w = workingPhoto.width;
+    const h = workingPhoto.height;
+    const out = document.createElement("canvas");
+    out.width = w;
+    out.height = h;
+    const outCtx = out.getContext("2d");
+    if (!outCtx) return null;
+
+    if (polygonClosed && polygon.length >= 3 && flakeData) {
+      const composite = outCtx.createImageData(w, h);
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const [px_, py_] of polygon) {
+        if (px_ < minX) minX = px_;
+        if (px_ > maxX) maxX = px_;
+        if (py_ < minY) minY = py_;
+        if (py_ > maxY) maxY = py_;
+      }
+      const polyLongest = Math.max(maxX - minX, maxY - minY);
+      const flakeTilePx = Math.max(
+        MIN_PHOTO_TILE_PX,
+        Math.round(polyLongest / PHOTO_REPEATS),
+      );
+      compositeFlakeOnPhotoPolygon(
+        {
+          photoData: workingPhoto,
+          polygon,
+          flakeData,
+          blend: 1,
+          tilePx: flakeTilePx,
+          lightingStrength: PHOTO_LIGHTING_STRENGTH,
+          glossStrength: PHOTO_GLOSS_STRENGTH,
+          aoStrength: PHOTO_AO_STRENGTH,
+          featherPx: PHOTO_EDGE_FEATHER_PX,
+        },
+        composite,
+      );
+      outCtx.putImageData(composite, 0, 0);
+    } else {
+      outCtx.putImageData(workingPhoto, 0, 0);
+    }
+    return out;
+  };
+
   return {
     setFinish: async (finish) => {
       currentFinish = finish;
@@ -544,6 +595,7 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
       }
     },
     hasPhoto: () => workingPhoto !== null,
+    captureCleanCanvas,
     dispose: () => {
       toolbar.file.removeEventListener("change", onFileChange);
       toolbar.undo.removeEventListener("click", onUndo);
