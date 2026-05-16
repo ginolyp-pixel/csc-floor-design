@@ -38,6 +38,8 @@ export type PhotoModeDeps = {
   initialFinish: FloorFinish;
 };
 
+export type InteractionMode = "manual" | "sam";
+
 export type PhotoMode = {
   setFinish(finish: FloorFinish): Promise<void>;
   setActive(active: boolean): void;
@@ -46,15 +48,42 @@ export type PhotoMode = {
   /** Returns a fresh canvas of the current composite WITHOUT the polygon
    *  overlay/markers — for clean export. Returns null if no photo is loaded. */
   captureCleanCanvas(): HTMLCanvasElement | null;
-  /** Returns everything the server needs to persist this design:
-   *  - photo: JPEG of the working (downscaled) photo
-   *  - preview: PNG of the clean composite (no outline)
-   *  - polygon + width/height
-   *  Returns null if no photo or no closed polygon. */
+  /** Returns everything the server needs to persist this design. */
   buildSavePayload(): Promise<SavePayload | null>;
   /** Hydrate from a saved design: load photo blob + restore polygon. */
   loadDesign(input: LoadDesignInput): Promise<void>;
+  /**
+   * Switch interaction model. "manual" = tap-to-add-point trace (current
+   * behavior; mobile default). "sam" = auto-detect via tap-to-segment.
+   * Call `attachSamDetector` after switching to "sam" so taps know what
+   * to do with their points.
+   */
+  setInteractionMode(mode: InteractionMode): void;
+  /** Wire up the SAM detector + status handler. Required for "sam" mode. */
+  attachSamDetector(input: SamHooks): void;
+  /** Called whenever a new photo is loaded by file picker. */
+  setOnPhotoChange(cb: () => void): void;
+  /** Returns the current photo canvas (used by SAM to encode the photo). */
+  getPhotoCanvas(): HTMLCanvasElement;
+  /** Replace the current polygon with a closed shape from auto-detect. */
+  setDetectedPolygon(polygon: Point2[]): void;
+  /** Clear polygon + any SAM prompt state. Keeps photo loaded. */
+  clearDetection(): void;
   dispose(): void;
+};
+
+/**
+ * Adapter wiring photo.ts's "tap happened" events to whatever code runs
+ * SAM. The detector runs OUTSIDE photo.ts so the SAM module stays lazy-
+ * loaded (only fetched on desktop, only after first photo upload).
+ */
+export type SamHooks = {
+  /**
+   * Called when the user taps the photo in SAM mode. Should run the SAM
+   * decoder and return the resulting polygon, or null if the decoder
+   * couldn't produce one. Errors should reject so we can show feedback.
+   */
+  segment(points: Point2[], labels: number[]): Promise<Point2[]>;
 };
 
 export type SavePayload = {
@@ -142,6 +171,14 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
   let cursorPos: Point2 | null = null;
   let touchDragging = false;
   let lastPointerType: "touch" | "mouse" | "pen" = "mouse";
+  let interactionMode: InteractionMode = "manual";
+  let samHooks: SamHooks | null = null;
+  // For SAM mode: accumulated tap prompts (latest tap appended). Cleared
+  // on Clear or photo change.
+  const samPoints: Point2[] = [];
+  const samLabels: number[] = [];
+  let samBusy = false;
+  let onPhotoChangeCb: (() => void) | null = null;
 
   const dist2D = (a: Point2, b: Point2): number =>
     Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -257,7 +294,11 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
     const BRAND_RED = "#d23540";
     const SNAP_GREEN = "#23a456";
 
-    const showOutline = !(polygonClosed && polygon.length >= 3 && flakeData);
+    // SAM mode never shows the outline or corner markers — the user didn't
+    // draw the polygon, so highlighting it as if they did is just clutter.
+    const showOutline =
+      interactionMode !== "sam" &&
+      !(polygonClosed && polygon.length >= 3 && flakeData);
 
     if (showOutline && polygon.length > 0) {
       ctx.lineCap = "round";
@@ -379,6 +420,8 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
     polygon.length = 0;
     polygonClosed = false;
     cursorPos = null;
+    samPoints.length = 0;
+    samLabels.length = 0;
   };
 
   // ---------------------------------------------------------------------------
@@ -395,10 +438,13 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
         const { data } = imageToWorkingData(img, MAX_PHOTO_DIM);
         workingPhoto = data;
         resetOutline();
+        samPoints.length = 0;
+        samLabels.length = 0;
         refreshStatus();
         updateToolbarState();
         updateHintVisibility();
         drawFrame();
+        onPhotoChangeCb?.();
       } catch {
         setStatus("Could not read that image. Try another file.");
       }
@@ -463,11 +509,48 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
     cursorPos = null;
   };
 
+  const handleSamTap = async (p: Point2, exclude: boolean): Promise<void> => {
+    if (!samHooks || samBusy || !workingPhoto) return;
+    samBusy = true;
+    samPoints.push(p);
+    samLabels.push(exclude ? 0 : 1);
+    deps.toolbar.status.textContent = "Detecting your floor…";
+    try {
+      const detected = await samHooks.segment(
+        samPoints.map((pt) => [pt[0], pt[1]] as Point2),
+        samLabels.slice(),
+      );
+      polygon.length = 0;
+      if (detected.length >= 3) {
+        for (const pt of detected) polygon.push([pt[0], pt[1]]);
+        polygonClosed = true;
+      } else {
+        polygonClosed = false;
+      }
+      cursorPos = null;
+    } catch (err) {
+      console.error("SAM segment failed", err);
+      deps.toolbar.status.textContent = "Auto-detect failed — try tapping again.";
+    } finally {
+      samBusy = false;
+      refreshStatus();
+      updateToolbarState();
+      drawFrame();
+    }
+  };
+
   const onPointerDown = (e: PointerEvent): void => {
     if (!active || !workingPhoto) return;
-    if (polygonClosed) return;
     lastPointerType = e.pointerType as typeof lastPointerType;
     const p = canvasBitmapCoords(e, canvas);
+
+    if (interactionMode === "sam") {
+      // SAM owns the tap. Shift-click for "exclude this region".
+      void handleSamTap(p, e.shiftKey || e.button === 2);
+      return;
+    }
+
+    if (polygonClosed) return;
 
     if (isTouchEvt(e)) {
       if (polygon.length === 0) {
@@ -492,6 +575,7 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
 
   const onPointerMove = (e: PointerEvent): void => {
     if (!active || !workingPhoto || polygonClosed) return;
+    if (interactionMode === "sam") return; // no live trace preview in SAM mode
     if (polygon.length === 0) return;
     if (isTouchEvt(e) && !touchDragging) return;
     cursorPos = canvasBitmapCoords(e, canvas);
@@ -649,6 +733,58 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
         photoWidth: workingPhoto.width,
         photoHeight: workingPhoto.height,
       };
+    },
+    setInteractionMode: (m) => {
+      interactionMode = m;
+      // Cursor preview only makes sense in manual mode.
+      cursorPos = null;
+      // Reset any in-flight SAM prompts when switching modes.
+      samPoints.length = 0;
+      samLabels.length = 0;
+      refreshStatus();
+      updateToolbarState();
+      updateHintVisibility();
+      if (active) drawFrame();
+    },
+    attachSamDetector: (hooks) => {
+      samHooks = hooks;
+    },
+    setOnPhotoChange: (cb) => {
+      onPhotoChangeCb = cb;
+    },
+    getPhotoCanvas: () => {
+      // Returns a fresh canvas of the working photo (no overlay). SAM needs
+      // raw pixels for the encoder.
+      const c = document.createElement("canvas");
+      if (workingPhoto) {
+        c.width = workingPhoto.width;
+        c.height = workingPhoto.height;
+        const cc = c.getContext("2d");
+        if (cc) cc.putImageData(workingPhoto, 0, 0);
+      } else {
+        c.width = 1;
+        c.height = 1;
+      }
+      return c;
+    },
+    setDetectedPolygon: (poly) => {
+      polygon.length = 0;
+      for (const p of poly) polygon.push([p[0], p[1]]);
+      polygonClosed = polygon.length >= 3;
+      cursorPos = null;
+      refreshStatus();
+      updateToolbarState();
+      if (active) drawFrame();
+    },
+    clearDetection: () => {
+      polygon.length = 0;
+      polygonClosed = false;
+      cursorPos = null;
+      samPoints.length = 0;
+      samLabels.length = 0;
+      refreshStatus();
+      updateToolbarState();
+      if (active) drawFrame();
     },
     loadDesign: async ({ photoBlob, polygon: poly, closed }) => {
       const url = URL.createObjectURL(photoBlob);

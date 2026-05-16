@@ -132,6 +132,13 @@ async function init(): Promise<void> {
   let photo: PhotoMode | undefined;
   let photoModulePromise: Promise<PhotoMode> | null = null;
 
+  // PC = not phone, not tablet, viewport wide enough that the SAM model has
+  // room to render usefully + meaningfully different UX from a touch device.
+  // iPad (which reports as "iPad") and Android tablets get manual trace.
+  const isPC =
+    !/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) &&
+    window.innerWidth >= 900;
+
   const ensurePhotoMode = (): Promise<PhotoMode> => {
     if (photo) return Promise.resolve(photo);
     if (!photoModulePromise) {
@@ -149,10 +156,70 @@ async function init(): Promise<void> {
           },
           initialFinish: selectedFinish,
         });
+        if (isPC) wireDesktopAutoDetect(photo);
         return photo;
       });
     }
     return photoModulePromise;
+  };
+
+  const wireDesktopAutoDetect = (p: PhotoMode): void => {
+    // Hide manual-trace buttons; PC uses tap-to-segment only.
+    photoUndo.hidden = true;
+    photoDone.hidden = true;
+    photoResetOutline.textContent = "Clear detection";
+    if (hintPhoto) {
+      hintPhoto.innerHTML =
+        "Upload a photo, then <strong>tap once on your floor</strong>. " +
+        "The auto-detector outlines the floor for you. " +
+        "Shift-click to exclude a region; the <strong>Clear detection</strong> button starts over.";
+    }
+    p.setInteractionMode("sam");
+
+    let detectorPromise: Promise<import("./photo/sam-detector").SamDetector> | null = null;
+    const setStatus = (msg: string): void => { photoStatus.textContent = msg; };
+
+    const ensureDetector = async (): Promise<import("./photo/sam-detector").SamDetector> => {
+      if (!detectorPromise) {
+        setStatus("Loading floor detector… (first time only, may take a minute)");
+        detectorPromise = import("./photo/sam-detector")
+          .then(({ createSamDetector }) =>
+            createSamDetector((s) => {
+              if (s.kind === "loading-model") setStatus("Loading floor detector…");
+              else if (s.kind === "encoding-photo") setStatus("Analyzing your photo…");
+              else if (s.kind === "ready") setStatus("Tap on your floor to detect.");
+              else if (s.kind === "segmenting") setStatus("Detecting floor…");
+              else if (s.kind === "error") setStatus(s.message);
+            }),
+          )
+          .catch((err) => {
+            // Allow the user to retry after a load failure.
+            detectorPromise = null;
+            throw err;
+          });
+      }
+      return detectorPromise;
+    };
+
+    p.attachSamDetector({
+      segment: async (points, labels) => {
+        const det = await ensureDetector();
+        return det.segment(points, labels);
+      },
+    });
+
+    p.setOnPhotoChange(() => {
+      // When the user picks a photo, kick off the encoder so the first tap
+      // doesn't have to wait for it.
+      void (async () => {
+        try {
+          const det = await ensureDetector();
+          await det.setPhoto(p.getPhotoCanvas());
+        } catch (err) {
+          console.error("SAM photo encode failed", err);
+        }
+      })();
+    });
   };
 
   const selectFinish = (finish: FloorFinish): void => {
