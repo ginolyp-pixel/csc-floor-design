@@ -111,8 +111,52 @@
   // kills tabs > ~250 MB. SAM encoder on a 1024² photo plus a fp32 model can
   // easily exceed that. Cap photo size hard on small viewports.
   const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-  const MAX_DIM = isMobile ? 640 : 1024;
-  $("deviceInfo").textContent = `device: ${isMobile ? "mobile" : "desktop"}   photo cap: ${MAX_DIM}px   model dtype: ${isMobile ? "q8 (quantized)" : "default"}`;
+  const MAX_DIM = isMobile ? 480 : 1024;
+
+  // Crash-resilient logging: every step writes its name to sessionStorage
+  // BEFORE running. If the tab gets killed for OOM, the next page load can
+  // read the last-known step and tell us where it died.
+  const LOG_KEY = "spike-sam-trace";
+  const CRASHED_KEY = "spike-sam-crashed";
+  function trace(step, extra) {
+    const entry = { t: new Date().toISOString(), step, extra };
+    let log = [];
+    try { log = JSON.parse(sessionStorage.getItem(LOG_KEY) || "[]"); } catch { /* ignore */ }
+    log.push(entry);
+    if (log.length > 50) log = log.slice(-50);
+    sessionStorage.setItem(LOG_KEY, JSON.stringify(log));
+    sessionStorage.setItem(CRASHED_KEY, "1"); // cleared on clean unload
+    console.log("[trace]", step, extra ?? "");
+  }
+  function clearTrace() {
+    sessionStorage.removeItem(LOG_KEY);
+    sessionStorage.removeItem(CRASHED_KEY);
+  }
+  // If a previous session crashed mid-step, show what step died.
+  window.addEventListener("beforeunload", () => sessionStorage.removeItem(CRASHED_KEY));
+  if (sessionStorage.getItem(CRASHED_KEY)) {
+    try {
+      const log = JSON.parse(sessionStorage.getItem(LOG_KEY) || "[]");
+      const last = log[log.length - 1];
+      if (last) {
+        const banner = document.createElement("div");
+        banner.className = "status error";
+        banner.innerHTML = `<strong>Previous session was killed.</strong> Last step: <code>${last.step}</code> at ${last.t}. Tap "Clear trace" to reset.`;
+        document.body.insertBefore(banner, document.body.firstChild.nextSibling);
+        const btn = document.createElement("button");
+        btn.textContent = "Clear trace";
+        btn.onclick = () => { clearTrace(); banner.remove(); };
+        banner.appendChild(document.createTextNode(" "));
+        banner.appendChild(btn);
+        const dump = document.createElement("details");
+        dump.innerHTML = `<summary>Full trace (${log.length} steps)</summary><pre>${JSON.stringify(log, null, 2)}</pre>`;
+        banner.appendChild(dump);
+      }
+    } catch { /* ignore */ }
+  }
+
+  trace("page-loaded");
+  $("deviceInfo").textContent = `device: ${isMobile ? "mobile" : "desktop"}   photo cap: ${MAX_DIM}px   model dtype: ${isMobile ? "q8 (quantized)" : "default"}   UA: ${navigator.userAgent.substring(0, 60)}`;
 
   function setStatus(msg, kind = "") {
     statusEl.textContent = msg;
@@ -129,11 +173,12 @@
     setStatus(`Loading ${modelId}… (first time may take 1–2 min, then cached)`, "busy");
     try {
       const t0 = performance.now();
-      // On mobile, prefer quantized weights to fit in tab memory. On desktop
-      // let the lib pick the highest-fidelity variant available.
       const modelOpts = isMobile ? { dtype: "q8" } : {};
+      trace("model-load:start", { modelId, opts: modelOpts });
       model = await SamModel.from_pretrained(modelId, modelOpts);
+      trace("model-load:weights-done");
       processor = await AutoProcessor.from_pretrained(modelId);
+      trace("model-load:processor-done");
       const t1 = performance.now();
       setStatus(`Model ready. Choose a photo.`, "ready");
       setTiming([`model load: ${((t1 - t0) / 1000).toFixed(1)}s`]);
@@ -150,39 +195,56 @@
   fileInput.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    trace("photo:selected", { name: file.name, size: file.size, type: file.type });
     setStatus("Decoding photo…", "busy");
 
-    // Use createImageBitmap with resize options so the full-resolution
-    // pixels never get materialized in memory. A 12 MP iPhone photo is 48 MB
-    // raw — decoding it into an HTMLImageElement first is what was crashing
-    // the mobile tab. resizeQuality:"high" gives Lanczos-quality downscale.
-    let probeBitmap;
+    // Two-stage decode with explicit downscaling. The mobile-crash failure
+    // mode is that even the "probe" pass through createImageBitmap allocates
+    // a full-resolution bitmap. So we go through an HTMLImageElement first to
+    // get just dimensions (the browser doesn't always need to decode pixels
+    // for that), THEN ask for a resized bitmap.
+    const url = URL.createObjectURL(file);
+    let naturalW = 0, naturalH = 0;
     try {
-      probeBitmap = await createImageBitmap(file);
+      trace("photo:probe-dims:start");
+      await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => { naturalW = i.naturalWidth; naturalH = i.naturalHeight; resolve(); };
+        i.onerror = () => reject(new Error("dimension probe failed"));
+        i.src = url;
+      });
+      trace("photo:probe-dims:done", { naturalW, naturalH });
     } catch (err) {
-      setStatus("Couldn't decode that photo: " + err.message, "error");
+      URL.revokeObjectURL(url);
+      setStatus("Couldn't read photo dimensions: " + err.message, "error");
       return;
     }
-    const scale = Math.min(MAX_DIM / probeBitmap.width, MAX_DIM / probeBitmap.height, 1);
-    const targetW = Math.max(1, Math.round(probeBitmap.width * scale));
-    const targetH = Math.max(1, Math.round(probeBitmap.height * scale));
-    probeBitmap.close(); // free the full-size bitmap
+
+    const scale = Math.min(MAX_DIM / naturalW, MAX_DIM / naturalH, 1);
+    const targetW = Math.max(1, Math.round(naturalW * scale));
+    const targetH = Math.max(1, Math.round(naturalH * scale));
+    trace("photo:resize-target", { targetW, targetH, scale });
 
     let bitmap;
     try {
+      trace("photo:bitmap-decode:start");
       bitmap = await createImageBitmap(file, {
         resizeWidth: targetW,
         resizeHeight: targetH,
         resizeQuality: "high",
       });
+      trace("photo:bitmap-decode:done");
     } catch (err) {
+      URL.revokeObjectURL(url);
       setStatus("Couldn't decode that photo: " + err.message, "error");
       return;
     }
+    URL.revokeObjectURL(url);
     if (baseBitmap) baseBitmap.close();
     baseBitmap = bitmap;
     canvas.width = targetW;
     canvas.height = targetH;
+    trace("photo:draw-to-canvas");
     ctx.drawImage(baseBitmap, 0, 0);
     points.length = 0;
     lastMaskCanvas = null;
@@ -193,9 +255,15 @@
     canvas.classList.add("busy");
     const t0 = performance.now();
     try {
+      trace("encoder:raw-image:start");
       const raw = await RawImage.fromCanvas(canvas);
+      trace("encoder:raw-image:done");
+      trace("encoder:processor:start");
       const inputs = await processor(raw);
+      trace("encoder:processor:done");
+      trace("encoder:embeddings:start");
       imageEmbeddings = await model.get_image_embeddings(inputs);
+      trace("encoder:embeddings:done");
       originalSizes = inputs.original_sizes;
       reshapedInputSizes = inputs.reshaped_input_sizes;
       const t1 = performance.now();
@@ -203,6 +271,7 @@
       setTiming([`encoder: ${((t1 - t0) / 1000).toFixed(2)}s`, `canvas: ${canvas.width}×${canvas.height}`]);
     } catch (err) {
       console.error(err);
+      trace("encoder:error", { message: err.message });
       setStatus(`Encoder failed: ${err.message}`, "error");
     } finally {
       canvas.classList.remove("busy");
