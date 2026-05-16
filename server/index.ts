@@ -1,11 +1,13 @@
 import Fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import fastifyMultipart from "@fastify/multipart";
+import fastifyCookie from "@fastify/cookie";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { env } from "./env.ts";
 import { registerDesignRoutes } from "./routes/designs.ts";
+import { registerAdminRoutes } from "./routes/admin.ts";
 import { countActiveDesigns, countExpiredDesigns, databaseFilePath } from "./db.ts";
 import { diskStats, purgeExpired } from "./purge.ts";
 
@@ -26,6 +28,11 @@ await app.register(fastifyMultipart, {
     files: 2,
     fields: 8,
   },
+});
+
+await app.register(fastifyCookie, {
+  secret: env.SESSION_SECRET,
+  parseOptions: {},
 });
 
 app.get("/api/health", async () => ({
@@ -58,6 +65,7 @@ app.get("/api/stats", async () => {
 });
 
 await registerDesignRoutes(app);
+await registerAdminRoutes(app);
 
 if (existsSync(clientDist)) {
   await app.register(fastifyStatic, {

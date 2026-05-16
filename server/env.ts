@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { resolve } from "node:path";
+import { randomBytes } from "node:crypto";
 
 function num(name: string, fallback: number): number {
   const v = process.env[name];
@@ -30,4 +31,12 @@ export const env = {
   MAX_PHOTO_BYTES: num("MAX_PHOTO_BYTES", 15 * 1024 * 1024),
   MAX_PREVIEW_BYTES: num("MAX_PREVIEW_BYTES", 10 * 1024 * 1024),
   MAX_MASK_BYTES: num("MAX_MASK_BYTES", 256 * 1024),
+
+  /** Password for the /admin dashboard. If unset, admin features are
+   *  disabled and the endpoints return 503. */
+  ESTIMATOR_PASSWORD: str("ESTIMATOR_PASSWORD", ""),
+
+  /** Secret used to sign the admin session cookie. Auto-generated on each
+   *  boot if unset — set explicitly in prod so sessions survive restarts. */
+  SESSION_SECRET: str("SESSION_SECRET", randomBytes(32).toString("hex")),
 } as const;

@@ -50,6 +50,13 @@ const expiredStmt = db.prepare(`SELECT id, photo_path, preview_path FROM designs
 const deleteStmt = db.prepare(`DELETE FROM designs WHERE id = ?`);
 const countActiveStmt = db.prepare(`SELECT COUNT(*) as n FROM designs WHERE expires_at >= ?`);
 const countExpiredStmt = db.prepare(`SELECT COUNT(*) as n FROM designs WHERE expires_at < ?`);
+const listRecentStmt = db.prepare(`
+  SELECT id, created_at, expires_at, photo_path, flake_id, preview_path, emailed_to
+  FROM designs
+  WHERE expires_at >= ?
+  ORDER BY created_at DESC
+  LIMIT ?
+`);
 
 export function insertDesign(row: DesignRow): void {
   insertStmt.run(row);
@@ -75,6 +82,12 @@ export function countActiveDesigns(nowMs: number = Date.now()): number {
 
 export function countExpiredDesigns(nowMs: number = Date.now()): number {
   return (countExpiredStmt.get(nowMs) as { n: number }).n;
+}
+
+export type DesignSummary = Pick<DesignRow, "id" | "created_at" | "expires_at" | "photo_path" | "flake_id" | "preview_path" | "emailed_to">;
+
+export function listRecentDesigns(limit: number = 100, nowMs: number = Date.now()): DesignSummary[] {
+  return listRecentStmt.all(nowMs, limit) as DesignSummary[];
 }
 
 export function databaseFilePath(): string {
