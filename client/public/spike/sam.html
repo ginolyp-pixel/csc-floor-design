@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SAM Spike · Tap-to-Segment Floor</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; font-family: system-ui, -apple-system, sans-serif; padding: 20px; max-width: 1200px; background: #f6f6f6; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  p.lede { color: #555; margin: 0 0 16px; font-size: 14px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .row > * { padding: 6px 10px; font-size: 14px; }
+  button { cursor: pointer; background: #fff; border: 1px solid #ccc; border-radius: 4px; }
+  button:hover { background: #eee; }
+  button:disabled { color: #aaa; cursor: not-allowed; }
+  select { background: #fff; border: 1px solid #ccc; border-radius: 4px; }
+  .status { padding: 8px 12px; border-radius: 4px; background: #fff; border: 1px solid #ddd; margin: 8px 0; font-size: 14px; }
+  .status.ready { background: #d4edda; border-color: #c3e6cb; }
+  .status.error { background: #f8d7da; border-color: #f5c6cb; }
+  .status.busy { background: #fff3cd; border-color: #ffeeba; }
+  .timing { color: #666; font-size: 13px; margin: 4px 0; font-family: ui-monospace, monospace; }
+  .canvas-wrap { position: relative; display: inline-block; max-width: 100%; }
+  canvas { display: block; max-width: 100%; border: 1px solid #aaa; cursor: crosshair; background: #000; }
+  canvas.busy { cursor: wait; }
+  .legend { font-size: 13px; color: #666; margin-top: 4px; }
+  details { margin-top: 12px; font-size: 13px; }
+  details > summary { cursor: pointer; user-select: none; padding: 6px; background: #fff; border: 1px solid #ddd; border-radius: 4px; }
+  textarea { width: 100%; height: 120px; font-family: ui-monospace, monospace; font-size: 12px; box-sizing: border-box; margin-top: 6px; }
+</style>
+</head>
+<body>
+<h1>SAM Spike — tap-to-segment floor detection</h1>
+<p class="lede">
+  Phase 3 research spike. Upload a garage photo, tap once on the floor, watch the model produce a mask.
+  Foreground tap = green dot (include this region). Hold <kbd>Shift</kbd> to add a background tap = red dot
+  (exclude this region). Repeat to refine until the mask matches the floor.
+</p>
+
+<div class="row">
+  <label>Photo: <input type="file" id="file" accept="image/*" disabled /></label>
+  <button id="clear" disabled>Clear taps</button>
+  <button id="downloadMask" disabled>Download mask PNG</button>
+  <label>Model:
+    <select id="modelChoice" disabled>
+      <option value="Xenova/slimsam-77-uniform">SlimSAM-77 (~40 MB, fastest)</option>
+      <option value="Xenova/sam-vit-base">SAM-ViT-base (~350 MB, gold standard)</option>
+    </select>
+  </label>
+  <button id="loadModel">Load model</button>
+</div>
+
+<div class="status" id="status">Tap "Load model" to begin. First load downloads the model (cached after).</div>
+<div class="timing" id="timing"></div>
+
+<div class="canvas-wrap">
+  <canvas id="canvas" width="800" height="450"></canvas>
+</div>
+<div class="legend">Mask overlay tinted teal. Tap the canvas after a photo is loaded.</div>
+
+<details>
+  <summary>Polygon (simplified, ready for /api/designs mask_data)</summary>
+  <textarea id="polyOut" readonly placeholder="Click on the floor first…"></textarea>
+</details>
+
+<details>
+  <summary>Spike notes & instructions</summary>
+  <p>
+    What to evaluate on each photo:
+  </p>
+  <ul>
+    <li>Does a single tap on the floor produce a mask that follows the real floor edge?</li>
+    <li>How long does the image encoder take (one-shot per photo, scales with photo size)?</li>
+    <li>How long does the decoder take per tap (should be sub-200ms)?</li>
+    <li>Try photos with: clean empty floor / cars parked / tools strewn around / strong shadows / wide-angle phone shot.</li>
+    <li>When the auto-mask is wrong, can you fix it with one or two shift-click background taps?</li>
+  </ul>
+  <p>The model is downloaded from Hugging Face on first load and cached in the browser's IndexedDB. Subsequent loads are instant.</p>
+</details>
+
+<script type="module">
+  import { SamModel, AutoProcessor, RawImage, Tensor, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.0";
+
+  // Cache models in browser IndexedDB. Avoid pinging HF on every reload.
+  env.allowLocalModels = false;
+  env.useBrowserCache = true;
+
+  const $ = (id) => document.getElementById(id);
+  const fileInput = $("file");
+  const canvas = $("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const statusEl = $("status");
+  const timingEl = $("timing");
+  const polyOut = $("polyOut");
+  const loadBtn = $("loadModel");
+  const modelSelect = $("modelChoice");
+  const clearBtn = $("clear");
+  const dlBtn = $("downloadMask");
+
+  let model = null;
+  let processor = null;
+  let imageEmbeddings = null;
+  let originalSizes = null;
+  let reshapedInputSizes = null;
+  let baseImage = null;     // HTMLImageElement
+  let lastMaskCanvas = null; // <canvas> with binary mask at canvas size
+  const points = [];        // [{ x, y, label }] in canvas-pixel coords
+
+  function setStatus(msg, kind = "") {
+    statusEl.textContent = msg;
+    statusEl.className = "status" + (kind ? " " + kind : "");
+  }
+  function setTiming(parts) {
+    timingEl.textContent = parts.join("   ");
+  }
+
+  loadBtn.addEventListener("click", async () => {
+    loadBtn.disabled = true;
+    modelSelect.disabled = true;
+    const modelId = modelSelect.value;
+    setStatus(`Loading ${modelId}… (first time may take 1–2 min, then cached)`, "busy");
+    try {
+      const t0 = performance.now();
+      model = await SamModel.from_pretrained(modelId, { dtype: "fp32" });
+      processor = await AutoProcessor.from_pretrained(modelId);
+      const t1 = performance.now();
+      setStatus(`Model ready. Choose a photo.`, "ready");
+      setTiming([`model load: ${((t1 - t0) / 1000).toFixed(1)}s`]);
+      fileInput.disabled = false;
+      clearBtn.disabled = false;
+    } catch (err) {
+      console.error(err);
+      setStatus(`Model load failed: ${err.message}`, "error");
+      loadBtn.disabled = false;
+      modelSelect.disabled = false;
+    }
+  });
+
+  fileInput.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setStatus("Decoding photo…", "busy");
+    const img = await loadImage(URL.createObjectURL(file));
+    // Fit canvas to image, capped at 1024 on the long edge for sane GPU memory.
+    const maxDim = 1024;
+    const scale = Math.min(maxDim / img.naturalWidth, maxDim / img.naturalHeight, 1);
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    baseImage = img;
+    points.length = 0;
+    lastMaskCanvas = null;
+    dlBtn.disabled = true;
+    polyOut.value = "";
+
+    setStatus("Running image encoder (one-shot per photo)…", "busy");
+    canvas.classList.add("busy");
+    const t0 = performance.now();
+    try {
+      const raw = await RawImage.fromCanvas(canvas);
+      const inputs = await processor(raw);
+      imageEmbeddings = await model.get_image_embeddings(inputs);
+      originalSizes = inputs.original_sizes;
+      reshapedInputSizes = inputs.reshaped_input_sizes;
+      const t1 = performance.now();
+      setStatus("Photo ready — tap the floor. Shift+click to exclude a region.", "ready");
+      setTiming([`encoder: ${((t1 - t0) / 1000).toFixed(2)}s`, `canvas: ${canvas.width}×${canvas.height}`]);
+    } catch (err) {
+      console.error(err);
+      setStatus(`Encoder failed: ${err.message}`, "error");
+    } finally {
+      canvas.classList.remove("busy");
+    }
+  });
+
+  canvas.addEventListener("click", async (e) => {
+    if (!imageEmbeddings) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const label = e.shiftKey ? 0 : 1;
+    points.push({ x, y, label });
+    await runDecoder();
+  });
+
+  clearBtn.addEventListener("click", () => {
+    points.length = 0;
+    lastMaskCanvas = null;
+    if (baseImage) ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+    polyOut.value = "";
+    dlBtn.disabled = true;
+  });
+
+  dlBtn.addEventListener("click", () => {
+    if (!lastMaskCanvas) return;
+    lastMaskCanvas.toBlob((blob) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "mask.png";
+      a.click();
+    });
+  });
+
+  async function runDecoder() {
+    if (!points.length) return;
+    setStatus("Segmenting…", "busy");
+    canvas.classList.add("busy");
+    try {
+      const t0 = performance.now();
+      // Build prompt tensors. Coordinates must be in the *original* image's
+      // pixel space (i.e. what we drew on the canvas — which IS the input to
+      // the processor — so canvas coords work directly).
+      const inputPoints = new Tensor("float32",
+        new Float32Array(points.flatMap((p) => [p.x, p.y])),
+        [1, 1, points.length, 2]);
+      const inputLabels = new Tensor("int64",
+        new BigInt64Array(points.map((p) => BigInt(p.label))),
+        [1, 1, points.length]);
+
+      const outputs = await model({
+        ...imageEmbeddings,
+        input_points: inputPoints,
+        input_labels: inputLabels,
+      });
+      const masks = await processor.post_process_masks(
+        outputs.pred_masks,
+        originalSizes,
+        reshapedInputSizes,
+      );
+      const t1 = performance.now();
+
+      // outputs.iou_scores: shape [1, 1, num_masks]. Pick the highest-scoring mask.
+      const iouData = outputs.iou_scores.data;
+      let bestIdx = 0;
+      for (let i = 1; i < iouData.length; i++) if (iouData[i] > iouData[bestIdx]) bestIdx = i;
+      const maskTensor = masks[0];
+      const dims = maskTensor.dims;
+      const mh = dims[dims.length - 2];
+      const mw = dims[dims.length - 1];
+      const maskBytes = maskTensor.data;
+      const planeSize = mh * mw;
+      const offset = bestIdx * planeSize;
+
+      // Render: redraw photo + tint mask + draw points.
+      ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+      tintMaskOntoCanvas(maskBytes, mw, mh, offset, planeSize);
+      drawPoints();
+      stashMaskCanvas(maskBytes, mw, mh, offset, planeSize);
+      const poly = extractPolygon(maskBytes, mw, mh, offset, planeSize);
+      polyOut.value = JSON.stringify({ polygon: poly, photo_width: canvas.width, photo_height: canvas.height }, null, 2);
+
+      setStatus(`Mask iou=${iouData[bestIdx].toFixed(3)} (best of ${iouData.length})`, "ready");
+      setTiming([`decoder: ${(t1 - t0).toFixed(0)}ms`, `taps: ${points.length}`, `mask: ${mw}×${mh}`, `polygon pts: ${poly.length}`]);
+      dlBtn.disabled = false;
+    } catch (err) {
+      console.error(err);
+      setStatus(`Decoder failed: ${err.message}`, "error");
+    } finally {
+      canvas.classList.remove("busy");
+    }
+  }
+
+  function tintMaskOntoCanvas(maskBytes, mw, mh, offset, planeSize) {
+    // The mask is at original photo size; canvas is at downscaled photo size.
+    // mw/mh from post_process_masks should match the canvas because we passed
+    // the canvas RawImage in as the source. If they differ we scale.
+    const cw = canvas.width, ch = canvas.height;
+    const img = ctx.getImageData(0, 0, cw, ch);
+    const data = img.data;
+    const xScale = mw / cw;
+    const yScale = mh / ch;
+    for (let y = 0; y < ch; y++) {
+      const my = Math.min(mh - 1, Math.floor(y * yScale));
+      for (let x = 0; x < cw; x++) {
+        const mx = Math.min(mw - 1, Math.floor(x * xScale));
+        const m = maskBytes[offset + my * mw + mx];
+        if (m) {
+          const i = (y * cw + x) * 4;
+          // Tint teal at 45% blend.
+          data[i] = data[i] * 0.55 + 26 * 0.45;
+          data[i + 1] = data[i + 1] * 0.55 + 188 * 0.45;
+          data[i + 2] = data[i + 2] * 0.55 + 156 * 0.45;
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function stashMaskCanvas(maskBytes, mw, mh, offset, planeSize) {
+    const c = document.createElement("canvas");
+    c.width = canvas.width;
+    c.height = canvas.height;
+    const cctx = c.getContext("2d");
+    const img = cctx.createImageData(c.width, c.height);
+    const xScale = mw / c.width;
+    const yScale = mh / c.height;
+    for (let y = 0; y < c.height; y++) {
+      const my = Math.min(mh - 1, Math.floor(y * yScale));
+      for (let x = 0; x < c.width; x++) {
+        const mx = Math.min(mw - 1, Math.floor(x * xScale));
+        const m = maskBytes[offset + my * mw + mx];
+        const i = (y * c.width + x) * 4;
+        if (m) { img.data[i] = 255; img.data[i + 1] = 255; img.data[i + 2] = 255; img.data[i + 3] = 255; }
+        else { img.data[i + 3] = 255; }
+      }
+    }
+    cctx.putImageData(img, 0, 0);
+    lastMaskCanvas = c;
+  }
+
+  function drawPoints() {
+    for (const p of points) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+      ctx.fillStyle = p.label ? "#22c55e" : "#ef4444";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#fff";
+      ctx.stroke();
+    }
+  }
+
+  // Very simple polygon extraction: trace the boundary of the largest
+  // connected component, then Douglas-Peucker simplify. For the spike this is
+  // good enough; production extractor can be smarter.
+  function extractPolygon(maskBytes, mw, mh, offset, planeSize) {
+    // Find the rightmost-topmost boundary pixel as start.
+    const inMask = (x, y) => x >= 0 && x < mw && y >= 0 && y < mh && maskBytes[offset + y * mw + x] > 0;
+    let sx = -1, sy = -1;
+    outer: for (let y = 0; y < mh; y++) {
+      for (let x = 0; x < mw; x++) {
+        if (inMask(x, y)) { sx = x; sy = y; break outer; }
+      }
+    }
+    if (sx < 0) return [];
+
+    // Moore-neighbor boundary trace.
+    const dirs = [ [1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[1,-1] ];
+    const path = [];
+    let cx = sx, cy = sy, dir = 6; // came from top
+    const maxSteps = 4 * (mw + mh);
+    for (let step = 0; step < maxSteps; step++) {
+      path.push([cx, cy]);
+      let found = false;
+      for (let k = 0; k < 8; k++) {
+        const ndir = (dir + 6 + k) % 8;
+        const nx = cx + dirs[ndir][0];
+        const ny = cy + dirs[ndir][1];
+        if (inMask(nx, ny)) {
+          cx = nx; cy = ny;
+          dir = ndir;
+          found = true;
+          break;
+        }
+      }
+      if (!found) break;
+      if (path.length > 4 && cx === sx && cy === sy) break;
+    }
+
+    // Map mask coords back to canvas coords, then Douglas-Peucker.
+    const scaleX = canvas.width / mw;
+    const scaleY = canvas.height / mh;
+    const canvasPath = path.map(([x, y]) => [x * scaleX, y * scaleY]);
+    return douglasPeucker(canvasPath, 4);
+  }
+
+  function douglasPeucker(points, epsilon) {
+    if (points.length < 3) return points;
+    const sqEps = epsilon * epsilon;
+    function recurse(start, end) {
+      let maxSqDist = 0, idx = -1;
+      const [ax, ay] = points[start];
+      const [bx, by] = points[end];
+      const dx = bx - ax, dy = by - ay;
+      const denom = dx * dx + dy * dy || 1e-9;
+      for (let i = start + 1; i < end; i++) {
+        const [px, py] = points[i];
+        const t = ((px - ax) * dx + (py - ay) * dy) / denom;
+        const cx = ax + t * dx, cy = ay + t * dy;
+        const sqD = (px - cx) ** 2 + (py - cy) ** 2;
+        if (sqD > maxSqDist) { maxSqDist = sqD; idx = i; }
+      }
+      if (maxSqDist > sqEps && idx > 0) {
+        const left = recurse(start, idx);
+        const right = recurse(idx, end);
+        return left.slice(0, -1).concat(right);
+      }
+      return [points[start], points[end]];
+    }
+    return recurse(0, points.length - 1);
+  }
+
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("Image load failed"));
+      i.src = src;
+    });
+  }
+</script>
+</body>
+</html>
