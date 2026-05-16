@@ -1,3 +1,5 @@
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { env } from "../env.ts";
 
 const MODEL_ID = "Xenova/slimsam-77-uniform";
@@ -8,6 +10,9 @@ type LazyTransformers = {
   RawImage: typeof import("@huggingface/transformers").RawImage;
   Tensor: typeof import("@huggingface/transformers").Tensor;
 };
+
+const CACHE_DIR = join(env.DATA_DIR, "sam-cache");
+mkdirSync(CACHE_DIR, { recursive: true });
 
 let modelPromise: Promise<{ model: any; processor: any; tx: LazyTransformers }> | null = null;
 async function loadModel() {
@@ -22,14 +27,99 @@ async function loadModel() {
   return modelPromise;
 }
 
-// Serialize all SAM work through one queue so two concurrent requests
-// don't both kick off encoder runs and double-spike RAM.
 let queueTail: Promise<unknown> = Promise.resolve();
 function runQueued<T>(fn: () => Promise<T>): Promise<T> {
   const next = queueTail.then(() => fn(), () => fn());
   queueTail = next.catch(() => {});
   return next;
 }
+
+// ----- Multi-tensor disk cache ------------------------------------------
+
+type DType = "float32" | "int64" | "float64" | "int32" | "uint8";
+const DTYPE_TO_TA: Record<DType, any> = {
+  float32: Float32Array,
+  int64: BigInt64Array,
+  float64: Float64Array,
+  int32: Int32Array,
+  uint8: Uint8Array,
+};
+
+type TensorInfo = { dtype: DType; dims: number[]; offset: number; byteLength: number };
+type Manifest = {
+  tensors: Record<string, TensorInfo>;
+  original_sizes: number[][];
+  reshaped_input_sizes: number[][];
+};
+
+function tensorByteLen(t: any): number {
+  const data = t.data;
+  return data.byteLength ?? (data.length * (DTYPE_TO_TA[t.type as DType]?.BYTES_PER_ELEMENT ?? 4));
+}
+
+function tensorBuffer(t: any): Buffer {
+  const data = t.data;
+  if (data instanceof Buffer) return data;
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  return Buffer.from(data);
+}
+
+function serializeCache(
+  tensors: Record<string, any>,
+  original_sizes: number[][],
+  reshaped_input_sizes: number[][],
+): Buffer {
+  const manifest: Manifest = { tensors: {}, original_sizes, reshaped_input_sizes };
+  const chunks: Buffer[] = [];
+  let offset = 0;
+  for (const [name, t] of Object.entries(tensors)) {
+    const buf = tensorBuffer(t);
+    const pad = (8 - (offset % 8)) % 8;
+    if (pad > 0) { chunks.push(Buffer.alloc(pad)); offset += pad; }
+    manifest.tensors[name] = { dtype: t.type as DType, dims: Array.from(t.dims), offset, byteLength: buf.length };
+    chunks.push(buf);
+    offset += buf.length;
+  }
+  const json = Buffer.from(JSON.stringify(manifest), "utf-8");
+  const head = Buffer.alloc(8);
+  head.write("SAM4", 0);
+  head.writeUInt32LE(json.length, 4);
+  const headerSize = head.length + json.length;
+  const headerPad = (8 - (headerSize % 8)) % 8;
+  return Buffer.concat([head, json, Buffer.alloc(headerPad), ...chunks]);
+}
+
+function deserializeCache(buf: Buffer, tx: LazyTransformers): {
+  tensors: Record<string, any>;
+  original_sizes: number[][];
+  reshaped_input_sizes: number[][];
+} {
+  if (buf.toString("utf-8", 0, 4) !== "SAM4") throw new Error("bad cache magic");
+  const jsonLen = buf.readUInt32LE(4);
+  const manifest: Manifest = JSON.parse(buf.toString("utf-8", 8, 8 + jsonLen));
+  const headerSize = 8 + jsonLen;
+  const headerPad = (8 - (headerSize % 8)) % 8;
+  const dataStart = headerSize + headerPad;
+
+  const tensors: Record<string, any> = {};
+  for (const [name, info] of Object.entries(manifest.tensors)) {
+    const TA = DTYPE_TO_TA[info.dtype];
+    if (!TA) throw new Error(`unknown dtype ${info.dtype}`);
+    // Copy into a fresh typed array — guarantees alignment regardless of
+    // the source Buffer's byteOffset.
+    const arr = new TA(info.byteLength / TA.BYTES_PER_ELEMENT);
+    const view = new Uint8Array(arr.buffer);
+    view.set(buf.subarray(dataStart + info.offset, dataStart + info.offset + info.byteLength));
+    tensors[name] = new tx.Tensor(info.dtype, arr, info.dims);
+  }
+  return { tensors, original_sizes: manifest.original_sizes, reshaped_input_sizes: manifest.reshaped_input_sizes };
+}
+
+function cachePath(designId: string): string {
+  return join(CACHE_DIR, `${designId}.sam4`);
+}
+
+// ----- Public API -------------------------------------------------------
 
 export type SegmentRequest = {
   points: [number, number][];
@@ -41,12 +131,15 @@ export type SegmentResult = {
   iou: number;
   mask_width: number;
   mask_height: number;
-  encoder_ms: number;
+  encoder_ms: number | null;
   decoder_ms: number;
+  model_load_ms: number | null;
 };
 
+let modelLoadedOnce = false;
+
 export async function segmentDesign(
-  _designId: string,
+  designId: string,
   photoBuffer: Buffer,
   req: SegmentRequest,
 ): Promise<SegmentResult> {
@@ -54,37 +147,79 @@ export async function segmentDesign(
   if (req.points.length !== req.labels.length) throw new Error("points and labels length mismatch");
 
   return runQueued(async () => {
+    const tLoad0 = Date.now();
     const { model, processor, tx } = await loadModel();
+    const model_load_ms = modelLoadedOnce ? null : Date.now() - tLoad0;
+    modelLoadedOnce = true;
 
-    const t0 = Date.now();
-    const raw = await tx.RawImage.fromBlob(new Blob([new Uint8Array(photoBuffer)]));
-    const inputs = await processor(raw);
-    const embeddings = await model.get_image_embeddings(inputs);
-    const encoder_ms = Date.now() - t0;
+    // Try cache. If present, skip the encoder entirely — pass all cached
+    // tensors to model() and let forward() use image_embeddings as a hint
+    // to bypass the encoder.
+    const path = cachePath(designId);
+    let cached: ReturnType<typeof deserializeCache> | null = null;
+    let encoder_ms: number | null = null;
 
-    const inputPoints = new tx.Tensor(
+    if (existsSync(path)) {
+      try {
+        cached = deserializeCache(readFileSync(path), tx);
+      } catch (err) {
+        // Corrupted cache — fall through to recompute.
+        cached = null;
+      }
+    }
+
+    let modelInputs: Record<string, any>;
+    let original_sizes: number[][];
+    let reshaped_input_sizes: number[][];
+
+    if (cached) {
+      modelInputs = { ...cached.tensors };
+      original_sizes = cached.original_sizes;
+      reshaped_input_sizes = cached.reshaped_input_sizes;
+    } else {
+      const tEnc0 = Date.now();
+      const raw = await tx.RawImage.fromBlob(new Blob([new Uint8Array(photoBuffer)]));
+      const inputs = await processor(raw);
+      const embeddings = await model.get_image_embeddings(inputs);
+      encoder_ms = Date.now() - tEnc0;
+
+      // Cache pixel_values + every key returned by get_image_embeddings.
+      // We don't hard-code the encoder output keys — SlimSAM returns
+      // image_embeddings + image_positional_embeddings; other variants
+      // may differ.
+      const toCache: Record<string, any> = { pixel_values: inputs.pixel_values };
+      for (const key of Object.keys(embeddings)) toCache[key] = embeddings[key];
+
+      original_sizes = inputs.original_sizes;
+      reshaped_input_sizes = inputs.reshaped_input_sizes;
+      try {
+        writeFileSync(path, serializeCache(toCache, original_sizes, reshaped_input_sizes));
+      } catch (err) {
+        // Cache write failures are non-fatal — the segment call still works.
+      }
+
+      modelInputs = { ...toCache };
+    }
+
+    modelInputs.input_points = new tx.Tensor(
       "float32",
       new Float32Array(req.points.flat()),
       [1, 1, req.points.length, 2],
     );
-    const inputLabels = new tx.Tensor(
+    modelInputs.input_labels = new tx.Tensor(
       "int64",
       new BigInt64Array(req.labels.map((l) => BigInt(l))),
       [1, 1, req.labels.length],
     );
 
-    const t1 = Date.now();
-    const outputs = await model({
-      ...embeddings,
-      input_points: inputPoints,
-      input_labels: inputLabels,
-    });
+    const tDec0 = Date.now();
+    const outputs = await model(modelInputs);
     const masks = await processor.post_process_masks(
       outputs.pred_masks,
-      inputs.original_sizes,
-      inputs.reshaped_input_sizes,
+      original_sizes,
+      reshaped_input_sizes,
     );
-    const decoder_ms = Date.now() - t1;
+    const decoder_ms = Date.now() - tDec0;
 
     const iouScores = outputs.iou_scores.data as Float32Array;
     let bestIdx = 0;
@@ -101,7 +236,15 @@ export async function segmentDesign(
     for (let i = 0; i < planeSize; i++) maskBytes[i] = src[offset + i] ? 1 : 0;
 
     const polygon = extractPolygonFromMask(maskBytes, maskW, maskH);
-    return { polygon, iou: iouScores[bestIdx], mask_width: maskW, mask_height: maskH, encoder_ms, decoder_ms };
+    return {
+      polygon,
+      iou: iouScores[bestIdx],
+      mask_width: maskW,
+      mask_height: maskH,
+      encoder_ms,
+      decoder_ms,
+      model_load_ms,
+    };
   });
 }
 
