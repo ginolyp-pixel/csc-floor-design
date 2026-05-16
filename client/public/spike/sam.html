@@ -36,6 +36,11 @@
   Foreground tap = green dot (include this region). Hold <kbd>Shift</kbd> to add a background tap = red dot
   (exclude this region). Repeat to refine until the mask matches the floor.
 </p>
+<div class="status" id="mobileWarning" style="display: none;">
+  <strong>Heads up:</strong> auto-detect is best on a tablet or computer. On phones the
+  model may not load (memory limits) or the tab can reset mid-upload. If that happens, just
+  use the manual trace tool in the main app — it works the same on any device.
+</div>
 
 <div class="row">
   <label>Photo: <input type="file" id="file" accept="image/*" disabled /></label>
@@ -110,8 +115,15 @@
   // Mobile devices have aggressive per-tab memory limits. iOS Safari typically
   // kills tabs > ~250 MB. SAM encoder on a 1024² photo plus a fp32 model can
   // easily exceed that. Cap photo size hard on small viewports.
-  const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-  const MAX_DIM = isMobile ? 480 : 1024;
+  const isMobile = /Mobi|Android|iPhone/i.test(navigator.userAgent);
+  // iPad is large enough + has enough RAM that we treat it like a desktop —
+  // matches user's product call (tablet+ supported, phones best-effort).
+  const isPhone = isMobile;
+  const MAX_DIM = isPhone ? 480 : 1024;
+  if (isPhone) {
+    const w = document.getElementById("mobileWarning");
+    if (w) w.style.display = "";
+  }
 
   // Crash-resilient logging: every step writes its name to localStorage
   // BEFORE running. If the tab gets killed for OOM, the next page load can
