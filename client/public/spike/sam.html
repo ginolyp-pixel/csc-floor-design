@@ -113,7 +113,7 @@
   const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
   const MAX_DIM = isMobile ? 480 : 1024;
 
-  // Crash-resilient logging: every step writes its name to sessionStorage
+  // Crash-resilient logging: every step writes its name to localStorage
   // BEFORE running. If the tab gets killed for OOM, the next page load can
   // read the last-known step and tell us where it died.
   const LOG_KEY = "spike-sam-trace";
@@ -121,22 +121,22 @@
   function trace(step, extra) {
     const entry = { t: new Date().toISOString(), step, extra };
     let log = [];
-    try { log = JSON.parse(sessionStorage.getItem(LOG_KEY) || "[]"); } catch { /* ignore */ }
+    try { log = JSON.parse(localStorage.getItem(LOG_KEY) || "[]"); } catch { /* ignore */ }
     log.push(entry);
     if (log.length > 50) log = log.slice(-50);
-    sessionStorage.setItem(LOG_KEY, JSON.stringify(log));
-    sessionStorage.setItem(CRASHED_KEY, "1"); // cleared on clean unload
+    localStorage.setItem(LOG_KEY, JSON.stringify(log));
+    localStorage.setItem(CRASHED_KEY, "1"); // cleared on clean unload
     console.log("[trace]", step, extra ?? "");
   }
   function clearTrace() {
-    sessionStorage.removeItem(LOG_KEY);
-    sessionStorage.removeItem(CRASHED_KEY);
+    localStorage.removeItem(LOG_KEY);
+    localStorage.removeItem(CRASHED_KEY);
   }
   // If a previous session crashed mid-step, show what step died.
-  window.addEventListener("beforeunload", () => sessionStorage.removeItem(CRASHED_KEY));
-  if (sessionStorage.getItem(CRASHED_KEY)) {
+  window.addEventListener("beforeunload", () => localStorage.removeItem(CRASHED_KEY));
+  if (localStorage.getItem(CRASHED_KEY)) {
     try {
-      const log = JSON.parse(sessionStorage.getItem(LOG_KEY) || "[]");
+      const log = JSON.parse(localStorage.getItem(LOG_KEY) || "[]");
       const last = log[log.length - 1];
       if (last) {
         const banner = document.createElement("div");
