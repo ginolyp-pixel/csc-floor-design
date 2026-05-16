@@ -564,24 +564,32 @@ export function createGarageScene(container: HTMLElement): GarageContext {
     }),
   );
 
-  // Soft polished epoxy — clearcoat is dialed back so the HDRI's bright
-  // overhead light bank smears into a wide, gentle sheen across the
-  // floor instead of pooling into a mirror-sharp hot spot. The streak
-  // normal map keeps the long horizontal highlight character.
+  // Polished epoxy. Clearcoat + envMap intensity tuned to "you can tell
+  // it's been sealed and there's reflected light catching the sheen" —
+  // not "mirror-sharp hot spot in the middle of the floor". The streak
+  // normal map keeps the long horizontal highlight character so the
+  // reflection isn't a perfect ellipse, it's the wide soft band you
+  // actually see on a showroom epoxy floor.
   const floorStreakNormal = createStreakNormalMap();
   trackedTextures.push(floorStreakNormal);
   const floorMaterial = M(
     new MeshPhysicalMaterial({
       color: new Color(0xffffff),
-      // Soft satin sheen — just enough specular hint that the floor reads
-      // as sealed/glossy, but the flake colour is still clearly visible.
-      roughness: 0.7,
+      // Slightly less rough -> picks up env reflections more readily.
+      roughness: 0.55,
       metalness: 0.02,
-      clearcoat: 0.12,
-      clearcoatRoughness: 0.7,
-      envMapIntensity: 0.22,
+      // Stronger clearcoat for an obvious "sealed and glossy" look while
+      // staying soft enough that the flake colour is still the dominant
+      // visual.
+      clearcoat: 0.35,
+      clearcoatRoughness: 0.45,
+      // Envmap intensity bumped from 0.22 -> 0.5. Floor now picks up the
+      // overhead studio HDRI as a real visible reflection that anchors
+      // the surface as glossy.
+      envMapIntensity: 0.5,
       normalMap: floorStreakNormal,
-      normalScale: new Vector2(0.05, 0.025),
+      // Slightly stronger streak normals so the sheen has more character.
+      normalScale: new Vector2(0.08, 0.04),
     }),
   );
 
