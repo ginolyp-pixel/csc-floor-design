@@ -94,6 +94,7 @@ async function init(): Promise<void> {
   const photoClear = document.getElementById("fd-photo-clear") as HTMLButtonElement | null;
   const photoStatus = document.getElementById("fd-photo-status");
   const shareBtn = document.getElementById("fd-share") as HTMLButtonElement | null;
+  const emailBtn = document.getElementById("fd-email") as HTMLButtonElement | null;
   const saveBtn = document.getElementById("fd-save") as HTMLButtonElement | null;
 
   if (
@@ -101,7 +102,7 @@ async function init(): Promise<void> {
     !search || !preview || !quoteLink ||
     !btn3d || !btnPhoto || !photoCanvas || !photoToolbar ||
     !photoFile || !photoUndo || !photoDone || !photoResetOutline ||
-    !photoClear || !photoStatus || !shareBtn || !saveBtn
+    !photoClear || !photoStatus || !shareBtn || !emailBtn || !saveBtn
   ) {
     console.error("Floor Designer: missing required DOM nodes");
     return;
@@ -330,18 +331,20 @@ async function init(): Promise<void> {
     }, ms);
   };
 
-  const saveDesignAndCopyLink = async (): Promise<void> => {
+  // Saves the current photo-mode design server-side and returns the
+  // resulting persistent share URL. Returns null on any failure (photo
+  // missing, polygon open, network error). Manages the busy state of
+  // the passed-in button.
+  const saveDesignToServer = async (btn: HTMLButtonElement): Promise<string | null> => {
     const payload = await photo?.buildSavePayload();
     if (!payload) {
-      flashButton(shareBtn, "Couldn't build save payload");
-      return;
+      flashButton(btn, "Couldn't build save payload");
+      return null;
     }
-
-    const originalLabel = shareBtn.dataset.originalText ?? shareBtn.textContent ?? "";
-    if (!shareBtn.dataset.originalText) shareBtn.dataset.originalText = originalLabel;
-    shareBtn.disabled = true;
-    shareBtn.textContent = "Saving…";
-
+    const originalLabel = btn.dataset.originalText ?? btn.textContent ?? "";
+    if (!btn.dataset.originalText) btn.dataset.originalText = originalLabel;
+    btn.disabled = true;
+    btn.textContent = "Saving…";
     try {
       const fd = new FormData();
       fd.append("photo", payload.photo, "photo.jpg");
@@ -352,21 +355,18 @@ async function init(): Promise<void> {
         photo_height: payload.photoHeight,
       }));
       fd.append("flake_id", selectedFinish.id);
-
       const res = await fetch("/api/designs", { method: "POST", body: fd });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = (await res.json()) as { id: string; url: string };
-      const shareUrl = `${window.location.origin}/d/${body.id}`;
-      const ok = await copyTextToClipboard(shareUrl);
-
-      shareBtn.disabled = false;
-      shareBtn.textContent = originalLabel;
-      flashButton(shareBtn, ok ? "Saved link copied!" : `Saved — ${shareUrl}`);
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      return `${window.location.origin}/d/${body.id}`;
     } catch (err) {
-      console.error("Save & share failed", err);
-      shareBtn.disabled = false;
-      shareBtn.textContent = originalLabel;
-      flashButton(shareBtn, "Save failed — try again");
+      console.error("Save failed", err);
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      flashButton(btn, "Save failed — try again");
+      return null;
     }
   };
 
@@ -375,11 +375,40 @@ async function init(): Promise<void> {
     // server-side and share the /d/:id URL. Otherwise fall back to the
     // lightweight ?finish=... URL that needs no server roundtrip.
     if (mode === "photo" && photo?.hasClosedPolygon()) {
-      await saveDesignAndCopyLink();
+      const shareUrl = await saveDesignToServer(shareBtn);
+      if (!shareUrl) return;
+      const ok = await copyTextToClipboard(shareUrl);
+      flashButton(shareBtn, ok ? "Saved link copied!" : `Saved — ${shareUrl}`);
     } else {
       const ok = await copyTextToClipboard(window.location.href);
       flashButton(shareBtn, ok ? "Link copied!" : "Copy failed — long-press to copy");
     }
+  });
+
+  emailBtn.addEventListener("click", async () => {
+    // Get the canonical share URL (persistent /d/:id if a saved design,
+    // current page URL otherwise), then hand off to the OS email client
+    // via mailto: so the salesperson sends from their own address.
+    let shareUrl: string;
+    if (mode === "photo" && photo?.hasClosedPolygon()) {
+      const saved = await saveDesignToServer(emailBtn);
+      if (!saved) return;
+      shareUrl = saved;
+    } else {
+      shareUrl = window.location.href;
+    }
+    const subject = "Your custom floor design — Concrete Shield Coatings";
+    const body =
+      "Hi,\n\n" +
+      "Here's the floor design we put together:\n\n" +
+      shareUrl + "\n\n" +
+      "Open the link to see the design exactly as we set it up — the photo and the flake selection are saved. " +
+      "Share it with anyone, or reply to this email when you're ready for an on-site estimate.\n\n" +
+      "Concrete Shield Coatings Inc.\n" +
+      "https://www.concreteshieldcoatingsinc.com";
+    const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    flashButton(emailBtn, "Opening email…");
+    window.location.href = mailto;
   });
 
   saveBtn.addEventListener("click", async () => {
