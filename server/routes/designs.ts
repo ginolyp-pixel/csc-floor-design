@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { MultipartFile } from "@fastify/multipart";
-import { createReadStream, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { FLOOR_FINISHES } from "../../client/src/catalog.ts";
 import { env } from "../env.ts";
@@ -189,17 +189,21 @@ async function getDesignMeta(req: FastifyRequest<{ Params: IdParams }>, reply: F
   });
 }
 
-function streamFile(reply: FastifyReply, path: string, mime: string): void {
+function sendFileBuffer(reply: FastifyReply, path: string, mime: string): void {
+  // Read into memory + send as Buffer. Photos cap at MAX_PHOTO_BYTES (15 MB),
+  // previews at MAX_PREVIEW_BYTES (10 MB) — both fit comfortably. Avoids
+  // Fastify+HTTP/2 stream-pipeline edge cases that produced empty bodies.
+  let data: Buffer;
   try {
-    const stats = statSync(path);
-    reply
-      .header("Content-Type", mime)
-      .header("Content-Length", stats.size)
-      .header("Cache-Control", "public, max-age=31536000, immutable")
-      .send(createReadStream(path));
+    data = readFileSync(path);
   } catch {
     reply.code(404).send({ error: "file missing" });
+    return;
   }
+  reply
+    .header("Content-Type", mime)
+    .header("Cache-Control", "public, max-age=31536000, immutable")
+    .send(data);
 }
 
 async function getDesignPhoto(req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply): Promise<void> {
@@ -210,7 +214,7 @@ async function getDesignPhoto(req: FastifyRequest<{ Params: IdParams }>, reply: 
   if (row.expires_at < Date.now()) return reply.code(410).send({ error: "expired" });
   const ext = extname(row.photo_path).toLowerCase();
   const mime = PHOTO_EXT_TO_MIME[ext] ?? "application/octet-stream";
-  streamFile(reply, row.photo_path, mime);
+  sendFileBuffer(reply, row.photo_path, mime);
 }
 
 async function getDesignPreview(req: FastifyRequest<{ Params: IdParams }>, reply: FastifyReply): Promise<void> {
@@ -219,7 +223,7 @@ async function getDesignPreview(req: FastifyRequest<{ Params: IdParams }>, reply
   const row = getDesign(id);
   if (!row?.preview_path) return reply.code(404).send({ error: "not found" });
   if (row.expires_at < Date.now()) return reply.code(410).send({ error: "expired" });
-  streamFile(reply, row.preview_path, "image/png");
+  sendFileBuffer(reply, row.preview_path, "image/png");
 }
 
 export async function registerDesignRoutes(app: FastifyInstance): Promise<void> {
