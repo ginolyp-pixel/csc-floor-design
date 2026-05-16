@@ -42,12 +42,27 @@ export type PhotoMode = {
   setFinish(finish: FloorFinish): Promise<void>;
   setActive(active: boolean): void;
   hasPhoto(): boolean;
+  hasClosedPolygon(): boolean;
   /** Returns a fresh canvas of the current composite WITHOUT the polygon
    *  overlay/markers — for clean export. Returns null if no photo is loaded. */
   captureCleanCanvas(): HTMLCanvasElement | null;
+  /** Returns everything the server needs to persist this design:
+   *  - photo: JPEG of the working (downscaled) photo
+   *  - preview: PNG of the clean composite (no outline)
+   *  - polygon + width/height
+   *  Returns null if no photo or no closed polygon. */
+  buildSavePayload(): Promise<SavePayload | null>;
   /** Hydrate from a saved design: load photo blob + restore polygon. */
   loadDesign(input: LoadDesignInput): Promise<void>;
   dispose(): void;
+};
+
+export type SavePayload = {
+  photo: Blob;
+  preview: Blob;
+  polygon: [number, number][];
+  photoWidth: number;
+  photoHeight: number;
 };
 
 export type LoadDesignInput = {
@@ -603,7 +618,38 @@ export function mountPhotoMode(deps: PhotoModeDeps): PhotoMode {
       }
     },
     hasPhoto: () => workingPhoto !== null,
+    hasClosedPolygon: () => polygonClosed && polygon.length >= 3,
     captureCleanCanvas,
+    buildSavePayload: async (): Promise<SavePayload | null> => {
+      if (!workingPhoto) return null;
+      if (!polygonClosed || polygon.length < 3) return null;
+
+      const photoCanvas2 = document.createElement("canvas");
+      photoCanvas2.width = workingPhoto.width;
+      photoCanvas2.height = workingPhoto.height;
+      const pCtx = photoCanvas2.getContext("2d");
+      if (!pCtx) return null;
+      pCtx.putImageData(workingPhoto, 0, 0);
+
+      const previewCanvas = captureCleanCanvas();
+      if (!previewCanvas) return null;
+
+      const photoBlob = await new Promise<Blob | null>((resolve) =>
+        photoCanvas2.toBlob(resolve, "image/jpeg", 0.9),
+      );
+      const previewBlob = await new Promise<Blob | null>((resolve) =>
+        previewCanvas.toBlob(resolve, "image/png"),
+      );
+      if (!photoBlob || !previewBlob) return null;
+
+      return {
+        photo: photoBlob,
+        preview: previewBlob,
+        polygon: polygon.map((p): [number, number] => [p[0], p[1]]),
+        photoWidth: workingPhoto.width,
+        photoHeight: workingPhoto.height,
+      };
+    },
     loadDesign: async ({ photoBlob, polygon: poly, closed }) => {
       const url = URL.createObjectURL(photoBlob);
       try {

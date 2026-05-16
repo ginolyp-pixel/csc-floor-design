@@ -330,9 +330,56 @@ async function init(): Promise<void> {
     }, ms);
   };
 
+  const saveDesignAndCopyLink = async (): Promise<void> => {
+    const payload = await photo?.buildSavePayload();
+    if (!payload) {
+      flashButton(shareBtn, "Couldn't build save payload");
+      return;
+    }
+
+    const originalLabel = shareBtn.dataset.originalText ?? shareBtn.textContent ?? "";
+    if (!shareBtn.dataset.originalText) shareBtn.dataset.originalText = originalLabel;
+    shareBtn.disabled = true;
+    shareBtn.textContent = "Saving…";
+
+    try {
+      const fd = new FormData();
+      fd.append("photo", payload.photo, "photo.jpg");
+      fd.append("preview", payload.preview, "preview.png");
+      fd.append("mask_data", JSON.stringify({
+        polygon: payload.polygon,
+        photo_width: payload.photoWidth,
+        photo_height: payload.photoHeight,
+      }));
+      fd.append("flake_id", selectedFinish.id);
+
+      const res = await fetch("/api/designs", { method: "POST", body: fd });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = (await res.json()) as { id: string; url: string };
+      const shareUrl = `${window.location.origin}/d/${body.id}`;
+      const ok = await copyTextToClipboard(shareUrl);
+
+      shareBtn.disabled = false;
+      shareBtn.textContent = originalLabel;
+      flashButton(shareBtn, ok ? "Saved link copied!" : `Saved — ${shareUrl}`);
+    } catch (err) {
+      console.error("Save & share failed", err);
+      shareBtn.disabled = false;
+      shareBtn.textContent = originalLabel;
+      flashButton(shareBtn, "Save failed — try again");
+    }
+  };
+
   shareBtn.addEventListener("click", async () => {
-    const ok = await copyTextToClipboard(window.location.href);
-    flashButton(shareBtn, ok ? "Link copied!" : "Copy failed — long-press to copy");
+    // If there's a complete photo design (closed polygon), persist it
+    // server-side and share the /d/:id URL. Otherwise fall back to the
+    // lightweight ?finish=... URL that needs no server roundtrip.
+    if (mode === "photo" && photo?.hasClosedPolygon()) {
+      await saveDesignAndCopyLink();
+    } else {
+      const ok = await copyTextToClipboard(window.location.href);
+      flashButton(shareBtn, ok ? "Link copied!" : "Copy failed — long-press to copy");
+    }
   });
 
   saveBtn.addEventListener("click", async () => {
