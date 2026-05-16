@@ -51,6 +51,7 @@
 </div>
 
 <div class="status" id="status">Tap "Load model" to begin. First load downloads the model (cached after).</div>
+<div class="timing" id="deviceInfo"></div>
 <div class="timing" id="timing"></div>
 
 <div class="canvas-wrap">
@@ -102,9 +103,16 @@
   let imageEmbeddings = null;
   let originalSizes = null;
   let reshapedInputSizes = null;
-  let baseImage = null;     // HTMLImageElement
+  let baseBitmap = null;    // ImageBitmap at canvas size (small)
   let lastMaskCanvas = null; // <canvas> with binary mask at canvas size
   const points = [];        // [{ x, y, label }] in canvas-pixel coords
+
+  // Mobile devices have aggressive per-tab memory limits. iOS Safari typically
+  // kills tabs > ~250 MB. SAM encoder on a 1024² photo plus a fp32 model can
+  // easily exceed that. Cap photo size hard on small viewports.
+  const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+  const MAX_DIM = isMobile ? 640 : 1024;
+  $("deviceInfo").textContent = `device: ${isMobile ? "mobile" : "desktop"}   photo cap: ${MAX_DIM}px   model dtype: ${isMobile ? "q8 (quantized)" : "default"}`;
 
   function setStatus(msg, kind = "") {
     statusEl.textContent = msg;
@@ -121,7 +129,10 @@
     setStatus(`Loading ${modelId}… (first time may take 1–2 min, then cached)`, "busy");
     try {
       const t0 = performance.now();
-      model = await SamModel.from_pretrained(modelId, { dtype: "fp32" });
+      // On mobile, prefer quantized weights to fit in tab memory. On desktop
+      // let the lib pick the highest-fidelity variant available.
+      const modelOpts = isMobile ? { dtype: "q8" } : {};
+      model = await SamModel.from_pretrained(modelId, modelOpts);
       processor = await AutoProcessor.from_pretrained(modelId);
       const t1 = performance.now();
       setStatus(`Model ready. Choose a photo.`, "ready");
@@ -140,14 +151,39 @@
     const file = e.target.files?.[0];
     if (!file) return;
     setStatus("Decoding photo…", "busy");
-    const img = await loadImage(URL.createObjectURL(file));
-    // Fit canvas to image, capped at 1024 on the long edge for sane GPU memory.
-    const maxDim = 1024;
-    const scale = Math.min(maxDim / img.naturalWidth, maxDim / img.naturalHeight, 1);
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    baseImage = img;
+
+    // Use createImageBitmap with resize options so the full-resolution
+    // pixels never get materialized in memory. A 12 MP iPhone photo is 48 MB
+    // raw — decoding it into an HTMLImageElement first is what was crashing
+    // the mobile tab. resizeQuality:"high" gives Lanczos-quality downscale.
+    let probeBitmap;
+    try {
+      probeBitmap = await createImageBitmap(file);
+    } catch (err) {
+      setStatus("Couldn't decode that photo: " + err.message, "error");
+      return;
+    }
+    const scale = Math.min(MAX_DIM / probeBitmap.width, MAX_DIM / probeBitmap.height, 1);
+    const targetW = Math.max(1, Math.round(probeBitmap.width * scale));
+    const targetH = Math.max(1, Math.round(probeBitmap.height * scale));
+    probeBitmap.close(); // free the full-size bitmap
+
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file, {
+        resizeWidth: targetW,
+        resizeHeight: targetH,
+        resizeQuality: "high",
+      });
+    } catch (err) {
+      setStatus("Couldn't decode that photo: " + err.message, "error");
+      return;
+    }
+    if (baseBitmap) baseBitmap.close();
+    baseBitmap = bitmap;
+    canvas.width = targetW;
+    canvas.height = targetH;
+    ctx.drawImage(baseBitmap, 0, 0);
     points.length = 0;
     lastMaskCanvas = null;
     dlBtn.disabled = true;
@@ -186,7 +222,7 @@
   clearBtn.addEventListener("click", () => {
     points.length = 0;
     lastMaskCanvas = null;
-    if (baseImage) ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+    if (baseImage) ctx.drawImage(baseBitmap, 0, 0);
     polyOut.value = "";
     dlBtn.disabled = true;
   });
@@ -242,7 +278,7 @@
       const offset = bestIdx * planeSize;
 
       // Render: redraw photo + tint mask + draw points.
-      ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(baseBitmap, 0, 0);
       tintMaskOntoCanvas(maskBytes, mw, mh, offset, planeSize);
       drawPoints();
       stashMaskCanvas(maskBytes, mw, mh, offset, planeSize);
@@ -390,14 +426,6 @@
     return recurse(0, points.length - 1);
   }
 
-  function loadImage(src) {
-    return new Promise((resolve, reject) => {
-      const i = new Image();
-      i.onload = () => resolve(i);
-      i.onerror = () => reject(new Error("Image load failed"));
-      i.src = src;
-    });
-  }
 </script>
 </body>
 </html>
